@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Ops 部署控制台</title>
+<style>
+  :root{
+    --bg:#0b0f1a;--bg2:#0f1524;
+    --card:rgba(26,34,53,.72);--card-solid:#1a2235;--card2:#232d44;
+    --line:rgba(120,140,180,.16);--line-strong:rgba(120,140,180,.3);
+    --txt:#eef2fb;--muted:#8492b4;--faint:#5c6a8a;
+    --accent:#5b8def;--accent2:#8b5bef;
+    --ok:#34d399;--warn:#fbbf24;--err:#f87171;--info:#38bdf8;
+    --radius:16px;--radius-sm:11px;
+    --shadow:0 8px 30px rgba(0,0,0,.4);
+    --shadow-lg:0 20px 50px rgba(0,0,0,.55);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
+    color:var(--txt);line-height:1.5;-webkit-font-smoothing:antialiased;
+    background:
+      radial-gradient(1100px 620px at 12% -8%,rgba(91,141,239,.16),transparent 60%),
+      radial-gradient(900px 520px at 100% 0%,rgba(139,91,239,.14),transparent 55%),
+      linear-gradient(180deg,var(--bg2),var(--bg) 60%);
+    background-attachment:fixed;min-height:100vh;
+  }
+  ::selection{background:rgba(91,141,239,.35)}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:var(--line-strong);border-radius:8px}
+  ::-webkit-scrollbar-thumb:hover{background:var(--muted)}
+
+  /* ---------- Header ---------- */
+  header{
+    position:sticky;top:0;z-index:20;
+    background:rgba(11,15,26,.72);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+    border-bottom:1px solid var(--line);
+    padding:calc(14px + env(safe-area-inset-top)) calc(20px + env(safe-area-inset-right)) 14px calc(20px + env(safe-area-inset-left));
+    display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+  }
+  .brand{display:flex;align-items:center;gap:12px;min-width:0}
+  .logo{
+    width:38px;height:38px;border-radius:11px;flex:0 0 auto;
+    background:linear-gradient(135deg,var(--accent),var(--accent2));
+    display:grid;place-items:center;box-shadow:0 6px 18px rgba(91,141,239,.4);
+  }
+  .logo svg{width:21px;height:21px;stroke:#fff;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+  .brand .titles{min-width:0}
+  .brand h1{font-size:clamp(15px,4vw,18px);font-weight:700;letter-spacing:.2px;white-space:nowrap}
+  .brand .sub{font-size:11.5px;color:var(--muted);display:flex;align-items:center;gap:6px;margin-top:1px}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--faint);flex:0 0 auto;transition:.3s}
+  .dot.live{background:var(--ok);box-shadow:0 0 0 3px rgba(52,211,153,.18),0 0 8px var(--ok);animation:pulse 2s infinite}
+  .dot.down{background:var(--err);box-shadow:0 0 0 3px rgba(248,113,113,.18),0 0 8px var(--err)}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.55}}
+  .spacer{flex:1}
+  .toolbar{display:flex;gap:9px;flex-wrap:wrap;align-items:center}
+
+  /* ---------- Buttons ---------- */
+  .btn{
+    display:inline-flex;align-items:center;justify-content:center;gap:6px;
+    border:1px solid var(--line-strong);background:var(--card2);color:var(--txt);
+    padding:8px 14px;border-radius:10px;font-size:13px;font-weight:500;cursor:pointer;
+    transition:transform .12s,border-color .15s,background .15s,box-shadow .15s;white-space:nowrap;
+  }
+  .btn svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:0 0 auto}
+  .btn:hover{border-color:var(--accent);background:rgba(91,141,239,.12)}
+  .btn:active{transform:scale(.96)}
+  .btn:disabled{opacity:.4;cursor:not-allowed;transform:none}
+  .btn.primary{background:linear-gradient(135deg,var(--accent),var(--accent2));border-color:transparent;color:#fff;box-shadow:0 6px 16px rgba(91,141,239,.32)}
+  .btn.primary:hover{filter:brightness(1.08);background:linear-gradient(135deg,var(--accent),var(--accent2))}
+  .btn.warn{background:rgba(251,191,36,.08);border-color:rgba(251,191,36,.4);color:var(--warn)}
+  .btn.warn:hover{background:rgba(251,191,36,.16);border-color:var(--warn)}
+  .btn.err{background:rgba(248,113,113,.08);border-color:rgba(248,113,113,.4);color:var(--err)}
+  .btn.err:hover{background:rgba(248,113,113,.16);border-color:var(--err)}
+  .btn.ghost{background:transparent}
+  .btn.sm{padding:7px 10px;font-size:12.5px}
+  .btn.on{border-color:var(--ok);color:var(--ok);background:rgba(52,211,153,.1)}
+
+  /* ---------- Layout ---------- */
+  main{max-width:1240px;margin:0 auto;padding:22px 20px 72px}
+
+  /* ---------- Stats bar ---------- */
+  .stats{display:grid;gap:14px;grid-template-columns:repeat(4,1fr);margin-bottom:22px}
+  .stat{
+    background:var(--card);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+    border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px;
+    display:flex;align-items:center;gap:14px;position:relative;overflow:hidden;box-shadow:var(--shadow);
+  }
+  .stat::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--accent)}
+  .stat.ok::before{background:var(--ok)}.stat.err::before{background:var(--err)}.stat.info::before{background:var(--info)}
+  .stat .ic{width:42px;height:42px;border-radius:12px;display:grid;place-items:center;flex:0 0 auto;background:rgba(91,141,239,.14)}
+  .stat.ok .ic{background:rgba(52,211,153,.14)}.stat.err .ic{background:rgba(248,113,113,.14)}.stat.info .ic{background:rgba(56,189,248,.14)}
+  .stat .ic svg{width:21px;height:21px;stroke:var(--accent);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+  .stat.ok .ic svg{stroke:var(--ok)}.stat.err .ic svg{stroke:var(--err)}.stat.info .ic svg{stroke:var(--info)}
+  .stat .val{font-size:26px;font-weight:700;line-height:1.1;font-variant-numeric:tabular-nums}
+  .stat .lbl{font-size:12px;color:var(--muted);margin-top:2px}
+
+  /* ---------- Section title ---------- */
+  .section-head{display:flex;align-items:center;gap:10px;margin:0 2px 14px}
+  .section-head h2{font-size:15px;font-weight:600}
+  .section-head .count{font-size:12px;color:var(--muted);background:var(--card2);padding:2px 9px;border-radius:20px;border:1px solid var(--line)}
+
+  /* ---------- Grid & cards ---------- */
+  .grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fill,minmax(320px,1fr))}
+  .card{
+    background:var(--card);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+    border:1px solid var(--line);border-radius:var(--radius);padding:18px;
+    display:flex;flex-direction:column;gap:13px;min-width:0;position:relative;overflow:hidden;
+    transition:transform .18s,border-color .18s,box-shadow .18s;box-shadow:var(--shadow);
+  }
+  .card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--faint);transition:.2s}
+  .card.s-running::before{background:var(--ok)}
+  .card.s-exited::before,.card.s-created::before{background:var(--err)}
+  .card.s-other::before{background:var(--warn)}
+  .card:hover{transform:translateY(-3px);border-color:var(--line-strong);box-shadow:var(--shadow-lg)}
+  .card .top{display:flex;align-items:center;gap:11px}
+  .card .svc-ic{width:34px;height:34px;border-radius:10px;flex:0 0 auto;display:grid;place-items:center;background:linear-gradient(135deg,rgba(91,141,239,.2),rgba(139,91,239,.2));font-size:15px}
+  .card .name{font-size:16px;font-weight:600;min-width:0;overflow-wrap:anywhere;flex:1}
+  .badge{font-size:11px;padding:4px 10px;border-radius:20px;font-weight:600;white-space:nowrap;display:inline-flex;align-items:center;gap:5px}
+  .badge::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+  .badge.running{background:rgba(52,211,153,.14);color:var(--ok)}
+  .badge.exited,.badge.created{background:rgba(248,113,113,.14);color:var(--err)}
+  .badge.missing{background:rgba(139,152,181,.14);color:var(--muted)}
+  .badge.other{background:rgba(251,191,36,.14);color:var(--warn)}
+  .metas{display:flex;flex-direction:column;gap:7px}
+  .meta{font-size:12.5px;color:var(--muted);word-break:break-all;display:flex;gap:8px}
+  .meta b{color:var(--faint);font-weight:500;flex:0 0 42px;font-size:12px}
+  .meta span{color:var(--txt);min-width:0}
+  .actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:auto;padding-top:4px}
+  .actions .btn{flex:1;min-width:64px;text-align:center;padding:8px 6px}
+  .empty{text-align:center;color:var(--muted);padding:64px 20px;grid-column:1/-1}
+  .empty .ic{width:54px;height:54px;margin:0 auto 14px;border-radius:16px;background:var(--card2);display:grid;place-items:center}
+  .empty .ic svg{width:26px;height:26px;stroke:var(--faint);fill:none;stroke-width:1.8}
+
+  /* ---------- Skeleton ---------- */
+  .skel{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:18px;display:flex;flex-direction:column;gap:13px}
+  .skel .bar{height:12px;border-radius:6px;background:linear-gradient(90deg,var(--card2) 25%,rgba(120,140,180,.16) 50%,var(--card2) 75%);background-size:200% 100%;animation:shimmer 1.4s infinite}
+  .skel .bar.lg{height:18px;width:55%}.skel .bar.md{width:80%}.skel .bar.sm{width:40%}
+  @keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+
+  /* ---------- Modal ---------- */
+  .modal{position:fixed;inset:0;background:rgba(6,9,16,.7);backdrop-filter:blur(4px);z-index:50;display:none;align-items:center;justify-content:center;padding:16px}
+  .modal.show{display:flex;animation:fade .18s}
+  @keyframes fade{from{opacity:0}to{opacity:1}}
+  .modal .box{
+    background:var(--card-solid);border:1px solid var(--line-strong);border-radius:var(--radius);
+    width:100%;max-width:860px;max-height:86vh;display:flex;flex-direction:column;overflow:hidden;
+    box-shadow:var(--shadow-lg);animation:rise .22s cubic-bezier(.2,.8,.2,1);
+  }
+  @keyframes rise{from{opacity:0;transform:translateY(16px) scale(.98)}to{opacity:1;transform:none}}
+  .modal .box.form-box{max-width:500px}
+  .modal .head{padding:16px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
+  .modal .head .name{font-weight:600;flex:1;font-size:15px}
+  .modal pre{margin:0;padding:18px;overflow:auto;flex:1;font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:12.5px;line-height:1.65;color:#c9d4ea;white-space:pre-wrap;word-break:break-all;background:#080c15}
+  form{padding:18px;display:grid;gap:16px}
+  .field{display:grid;gap:7px}
+  .field label{font-size:12.5px;color:var(--muted);font-weight:500}
+  input,select{width:100%;border:1px solid var(--line-strong);background:#0d1320;color:var(--txt);padding:11px 13px;border-radius:10px;font:inherit;font-size:14px;outline:none;transition:border-color .15s,box-shadow .15s}
+  input:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(91,141,239,.18)}
+  .hint{font-size:12px;color:var(--faint)}
+  .form-actions{display:flex;justify-content:flex-end;gap:9px;margin-top:2px}
+
+  /* ---------- Toast ---------- */
+  .toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);background:var(--card-solid);border:1px solid var(--line-strong);border-radius:12px;padding:12px 20px;font-size:13px;max-width:90%;z-index:100;box-shadow:var(--shadow-lg);display:none;text-align:center}
+  .toast.show{display:block;animation:pop .25s cubic-bezier(.2,.8,.2,1)}
+  .toast.ok{border-color:var(--ok)}.toast.err{border-color:var(--err)}
+  /* 卡片内资源占用 */
+  .res{margin:10px 0 2px;padding:10px 12px;background:rgba(127,127,127,.06);border:1px solid var(--line);border-radius:10px;display:flex;flex-direction:column;gap:9px}
+  .res-load{color:var(--muted);font-size:12px;text-align:center;padding:12px}
+  .res .metric{display:flex;flex-direction:column;gap:4px}
+  .res .metric .lab{display:flex;justify-content:space-between;font-size:12px;color:var(--muted)}
+  .res .metric .lab b{color:var(--fg);font-weight:600}
+  .prog{height:7px;border-radius:6px;background:var(--line);overflow:hidden}
+  .prog>span{display:block;height:100%;border-radius:6px;background:linear-gradient(90deg,var(--ok),#42d392);transition:width .4s ease}
+  .prog.warn>span{background:linear-gradient(90deg,#e0a63a,#f0c14b)}
+  .prog.hot>span{background:linear-gradient(90deg,#e05a4a,#f07b6b)}
+  .res-io{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  @keyframes pop{from{opacity:0;transform:translateX(-50%) translateY(10px)}to{opacity:1;transform:translateX(-50%)}}
+
+  /* ---------- Host selector ---------- */
+  .hostsel{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line-strong);background:var(--card2);border-radius:10px;padding:5px 6px 5px 11px}
+  .hostsel svg{width:15px;height:15px;stroke:var(--muted);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:0 0 auto}
+  .hostsel select{border:none;background:transparent;color:var(--txt);padding:3px 4px;font-size:13px;font-weight:600;box-shadow:none;width:auto;min-width:80px;cursor:pointer}
+  .hostsel select:focus{box-shadow:none}
+  .hostsel .mini{border:1px solid var(--line-strong);background:var(--card-solid);color:var(--muted);width:28px;height:28px;padding:0;border-radius:8px;display:grid;place-items:center;cursor:pointer;flex:0 0 auto}
+  .hostsel .mini:hover{border-color:var(--accent);color:var(--accent)}
+  .hostsel .mini svg{width:15px;height:15px;stroke:currentColor}
+
+  /* ---------- Host manager list ---------- */
+  .hostlist{padding:6px 18px 4px;display:flex;flex-direction:column;gap:9px;overflow:auto}
+  .hostrow{display:flex;align-items:center;gap:12px;background:var(--card2);border:1px solid var(--line);border-radius:11px;padding:11px 13px}
+  .hostrow .hn{font-weight:600;font-size:14px}
+  .hostrow .ha{font-size:12px;color:var(--muted);word-break:break-all}
+  .hostrow .grow{flex:1;min-width:0}
+  .hostrow .tag{font-size:11px;color:var(--faint);border:1px solid var(--line);border-radius:20px;padding:2px 8px}
+  .hostrow.is-local .tag{color:var(--info);border-color:rgba(56,189,248,.4)}
+
+  /* ---------- Login ---------- */
+  .login{position:fixed;inset:0;z-index:200;display:none;align-items:center;justify-content:center;padding:20px;
+    background:radial-gradient(1000px 600px at 30% 0%,rgba(91,141,239,.16),transparent 60%),linear-gradient(180deg,var(--bg2),var(--bg))}
+  .login.show{display:flex}
+  .login .card2{width:100%;max-width:360px;background:var(--card-solid);border:1px solid var(--line-strong);border-radius:var(--radius);padding:28px 24px;box-shadow:var(--shadow-lg);text-align:center;animation:rise .25s cubic-bezier(.2,.8,.2,1)}
+  .login .logo{width:52px;height:52px;border-radius:14px;margin:0 auto 16px}
+  .login .logo svg{width:28px;height:28px}
+  .login h2{font-size:18px;font-weight:700;margin-bottom:6px}
+  .login p{font-size:12.5px;color:var(--muted);margin-bottom:20px}
+  .login input{margin-bottom:14px;text-align:center}
+  .login .btn{width:100%;padding:11px}
+
+  /* ---------- Responsive ---------- */
+  @media(max-width:900px){.stats{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:650px){
+    header{gap:10px}
+    .brand{width:100%}
+    .toolbar{width:100%}.toolbar .btn{flex:1}
+    .stats{gap:10px}
+    .stat{padding:13px}.stat .ic{width:36px;height:36px}.stat .val{font-size:21px}
+    .grid{grid-template-columns:1fr}
+    main{padding:16px 14px 60px}
+    .modal{padding:10px}
+    .actions .btn{min-width:72px}
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <div class="logo" aria-hidden="true">
+      <svg viewBox="0 0 24 24"><path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>
+    </div>
+    <div class="titles">
+      <h1>Ops 部署控制台</h1>
+      <div class="sub"><span class="dot" id="live" title="正在连接"></span><span id="liveTxt">正在连接…</span></div>
+    </div>
+  </div>
+  <span class="spacer"></span>
+  <div class="toolbar">
+    <div class="hostsel">
+      <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+      <select id="hostSelect" title="目标服务器" onchange="onHostChange()"></select>
+      <button class="mini" type="button" title="管理服务器" onclick="openHosts()">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg>
+      </button>
+    </div>
+    <button class="btn primary" type="button" onclick="openAction('deploy')">
+      <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>部署服务
+    </button>
+    <button class="btn" id="autoBtn" type="button" onclick="toggleAuto()">
+      <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>自动刷新
+    </button>
+    <button class="btn" id="refreshBtn" type="button" onclick="loadStatus()">
+      <svg viewBox="0 0 24 24"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.5 9a9 9 0 0 1 14.9-3.4L23 10M1 14l4.6 4.4A9 9 0 0 0 20.5 15"/></svg>刷新
+    </button>
+    <button class="btn ghost" type="button" title="退出登录" onclick="logout()">
+      <svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>
+    </button>
+  </div>
+</header>
+
+<main>
+  <div class="stats" id="stats">
+    <div class="stat"><div class="ic"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></div><div><div class="val" id="stTotal">—</div><div class="lbl">实例总数</div></div></div>
+    <div class="stat ok"><div class="ic"><svg viewBox="0 0 24 24"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m22 4-10 10.01L9 11"/></svg></div><div><div class="val" id="stRunning">—</div><div class="lbl">运行中</div></div></div>
+    <div class="stat err"><div class="ic"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg></div><div><div class="val" id="stDown">—</div><div class="lbl">异常 / 未运行</div></div></div>
+    <div class="stat info"><div class="ic"><svg viewBox="0 0 24 24"><path d="M20 7h-9M14 17H5M17 3l3 4-3 4M7 21l-3-4 3-4"/></svg></div><div><div class="val" id="stManaged">—</div><div class="lbl">管理服务</div></div></div>
+  </div>
+
+  <div class="section-head">
+    <h2>服务实例</h2>
+    <span class="count" id="gridCount"></span>
+  </div>
+  <div class="grid" id="grid"></div>
+</main>
+
+<div class="modal" id="actionModal" role="dialog" aria-modal="true" aria-labelledby="actionTitle">
+  <div class="box form-box">
+    <div class="head"><span class="name" id="actionTitle">执行操作</span><button class="btn sm ghost" type="button" onclick="closeAction()">关闭</button></div>
+    <form id="actionForm">
+      <div class="field"><label for="actionHost">目标服务器</label><select id="actionHost" required></select></div>
+      <div class="field"><label for="actionService">服务</label><select id="actionService" required></select></div>
+      <div class="field"><label for="actionId">实例 ID</label><input id="actionId" type="number" min="1" max="999" step="1" value="1" required></div>
+      <div class="field" id="imageField"><label for="actionImage">镜像</label><input id="actionImage" type="text" maxlength="200" autocomplete="off" placeholder="例如 gogs-game:v1001-4"><div class="hint" id="imageHint"></div></div>
+      <div class="form-actions"><button class="btn ghost" type="button" onclick="closeAction()">取消</button><button class="btn primary" id="actionSubmit" type="submit">确认</button></div>
+    </form>
+  </div>
+</div>
+
+<div class="modal" id="outputModal" role="dialog" aria-modal="true" aria-labelledby="outputTitle">
+  <div class="box">
+    <div class="head"><span class="name" id="outputTitle">执行结果</span><button class="btn sm" id="logRefreshBtn" type="button" onclick="refreshLog()">刷新</button><button class="btn sm ghost" type="button" onclick="closeOutput()">关闭</button></div>
+    <pre id="outputBody">加载中…</pre>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<div class="modal" id="hostsModal" role="dialog" aria-modal="true">
+  <div class="box form-box">
+    <div class="head"><span class="name">服务器管理</span><button class="btn sm ghost" type="button" onclick="closeHosts()">关闭</button></div>
+    <div class="hostlist" id="hostList"></div>
+    <form id="hostForm">
+      <div class="field"><label for="hostName">主机名</label><input id="hostName" type="text" maxlength="40" autocomplete="off" placeholder="如 gs-01（字母/数字/-/_）"></div>
+      <div class="field"><label for="hostSsh">SSH 地址</label><input id="hostSsh" type="text" maxlength="120" autocomplete="off" placeholder="如 ubuntu@10.0.0.5"></div>
+      <div class="field"><label for="hostPort">SSH 端口</label><input id="hostPort" type="number" min="1" max="65535" value="22"></div>
+      <div class="field"><label for="hostNote">备注（可选）</label><input id="hostNote" type="text" maxlength="100" autocomplete="off" placeholder="用途说明"></div>
+      <div class="hint">需先把控制机公钥加入目标机 authorized_keys，实现免密 SSH。可先「测试连接」确认可用。</div>
+      <div class="form-actions">
+        <button class="btn" id="hostTestBtn" type="button" onclick="testNewHost()">测试连接</button>
+        <button class="btn primary" id="hostAddBtn" type="submit">添加</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="login" id="login">
+  <div class="card2">
+    <div class="logo" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>
+    </div>
+    <h2>Ops 部署控制台</h2>
+    <p>请输入登录口令</p>
+    <form id="loginForm">
+      <input id="loginPw" type="password" autocomplete="current-password" placeholder="登录口令" required>
+      <button class="btn primary" type="submit" id="loginBtn">登录</button>
+    </form>
+  </div>
+</div>
+
+<script>
+'use strict';
+const MANAGED = ['platform','gate','game','battle'];
+const LABELS = {platform:'平台',gate:'网关',game:'游戏',battle:'战斗'};
+const ICONS = {platform:'🛠️',gate:'🚪',game:'🎮',battle:'⚔️'};
+const ACTION_LABELS = {start:'启动',stop:'停止',restart:'重启',deploy:'部署',rollback:'回滚'};
+const IMAGE_RE = /^[a-zA-Z0-9._/:-]+$/;
+let autoTimer = null;
+let curLog = null;
+let currentAction = 'deploy';
+let actionBusy = false;
+let currentHost = 'local';
+let hostsCache = [];
+let statsMap = {};
+
+function hostQS(){ return 'host='+encodeURIComponent(currentHost); }
+
+async function api(path, opts={}){
+  const response = await fetch(path, opts);
+  if(response.status===401){ showLogin(); throw new Error('未登录'); }
+  let data;
+  try{ data = await response.json(); }
+  catch(_){ throw new Error(`接口返回异常（HTTP ${response.status}）`); }
+  if(!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+  return data;
+}
+function esc(value){
+  return String(value ?? '').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function toast(message, ok=true){
+  const el=document.getElementById('toast');
+  el.textContent=message;el.className='toast show '+(ok?'ok':'err');
+  clearTimeout(el._timer);el._timer=setTimeout(()=>{el.className='toast';},3600);
+}
+function parseName(name){
+  const match=String(name).match(/^([a-z]+)-(\d+)$/);
+  return match?{svc:match[1],id:match[2]}:{svc:String(name),id:null};
+}
+function badgeClass(state){
+  if(state==='running')return 'running';
+  if(state==='exited'||state==='created')return state;
+  if(state==='missing')return 'missing';
+  return 'other';
+}
+function cardStateClass(state){
+  if(state==='running')return 's-running';
+  if(state==='exited'||state==='created')return 's-exited';
+  if(state==='missing')return 's-missing';
+  return 's-other';
+}
+function stateLabel(state){return {running:'运行中',exited:'已退出',created:'已创建',missing:'未创建'}[state]||state||'未知';}
+function normalizedServices(input){
+  const services=Array.isArray(input)?input.map(item=>({...item})):[];
+  for(const svc of MANAGED){
+    const name=`${svc}-1`;
+    if(!services.some(item=>item.name===name)) services.push({name,service:svc,state:'missing',status:'尚未创建容器',image:'-',ports:'-',missing:true});
+  }
+  return services.sort((a,b)=>{
+    const pa=parseName(a.name),pb=parseName(b.name);
+    const ai=MANAGED.indexOf(pa.svc),bi=MANAGED.indexOf(pb.svc);
+    const ar=ai<0?999:ai,br=bi<0?999:bi;
+    return ar-br || Number(pa.id||0)-Number(pb.id||0) || String(a.name).localeCompare(String(b.name));
+  });
+}
+function actionButton(action,svc,id,extra=''){
+  return `<button class="btn sm ${extra}" type="button" data-action="${esc(action)}" data-service="${esc(svc)}" data-id="${esc(id)}">${esc(ACTION_LABELS[action])}</button>`;
+}
+function skeleton(n=4){
+  const grid=document.getElementById('grid');
+  grid.innerHTML='';
+  for(let i=0;i<n;i++){
+    const s=document.createElement('div');s.className='skel';
+    s.innerHTML='<div class="bar lg"></div><div class="bar md"></div><div class="bar"></div><div class="bar sm"></div>';
+    grid.appendChild(s);
+  }
+}
+function setStats({total,running,down,managed}){
+  document.getElementById('stTotal').textContent=total;
+  document.getElementById('stRunning').textContent=running;
+  document.getElementById('stDown').textContent=down;
+  document.getElementById('stManaged').textContent=managed;
+}
+function render(input){
+  const services=normalizedServices(input);
+  const grid=document.getElementById('grid');
+  grid.innerHTML='';
+  let running=0,managedCount=0;
+  if(!services.length){
+    grid.innerHTML='<div class="empty"><div class="ic"><svg viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.7l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg></div>暂无服务数据</div>';
+    document.getElementById('gridCount').textContent='0 个';
+    setStats({total:0,running:0,down:0,managed:0});
+    return;
+  }
+  for(const item of services){
+    const {svc,id}=parseName(item.name),managed=MANAGED.includes(svc),exists=item.state!=='missing';
+    if(item.state==='running')running++;
+    if(managed)managedCount++;
+    const card=document.createElement('section');card.className='card '+cardStateClass(item.state);
+    const buttons=[];
+    if(exists) buttons.push(`<button class="btn sm" type="button" data-inspect="1" data-service="${esc(svc)}" data-id="${esc(id||1)}" data-name="${esc(item.name)}">详情</button>`);
+    if(exists) buttons.push(`<button class="btn sm" type="button" data-log="1" data-service="${esc(svc)}" data-id="${esc(id||1)}" data-name="${esc(item.name)}">日志</button>`);
+    if(managed){
+      buttons.push(actionButton(exists?'restart':'start',svc,id||1,exists?'':'primary'));
+      buttons.push(actionButton('deploy',svc,id||1,'primary'));
+      buttons.push(actionButton('rollback',svc,id||1,'warn'));
+      if(exists) buttons.push(actionButton('stop',svc,id||1,'err'));
+    }else buttons.push('<button class="btn sm" type="button" disabled>基础设施</button>');
+    const icon=ICONS[svc]||'📦';
+    const st=statsMap[item.name];
+    let statsHtml='';
+    if(item.state==='running'){
+      if(st){
+        const cpuP=pct(st.cpu),memP=pct(st.memPerc);
+        statsHtml=`<div class="res">`
+          +metricBar('CPU',st.cpu,cpuP)
+          +metricBar('内存',st.mem,memP)
+          +`<div class="res-io">↕ ${esc(st.netIO||'-')} · 💾 ${esc(st.blockIO||'-')} · PIDs ${esc(st.pids||'-')}</div>`
+          +`</div>`;
+      }else{
+        statsHtml=`<div class="res res-load">资源数据加载中…</div>`;
+      }
+    }
+    card.innerHTML=`<div class="top"><span class="svc-ic">${icon}</span><span class="name">${esc(item.name)}</span><span class="badge ${badgeClass(item.state)}">${esc(stateLabel(item.state))}</span></div>`
+      +`<div class="metas"><div class="meta"><b>镜像</b><span>${esc(item.image||'-')}</span></div><div class="meta"><b>状态</b><span>${esc(item.status||'-')}</span></div><div class="meta"><b>端口</b><span>${esc(item.ports||'-')}</span></div></div>`
+      +statsHtml
+      +`<div class="actions">${buttons.join('')}</div>`;
+    grid.appendChild(card);
+  }
+  grid.querySelectorAll('[data-action]').forEach(btn=>btn.addEventListener('click',()=>handleCardAction(btn.dataset.action,btn.dataset.service,btn.dataset.id)));
+  grid.querySelectorAll('[data-log]').forEach(btn=>btn.addEventListener('click',()=>showLog(btn.dataset.service,btn.dataset.id,btn.dataset.name)));
+  grid.querySelectorAll('[data-inspect]').forEach(btn=>btn.addEventListener('click',()=>showInspect(btn.dataset.service,btn.dataset.id,btn.dataset.name)));
+  document.getElementById('gridCount').textContent=`${services.length} 个`;
+  setStats({total:services.length,running,down:services.length-running,managed:managedCount});
+}
+async function loadStatus(){
+  const button=document.getElementById('refreshBtn'),live=document.getElementById('live'),liveTxt=document.getElementById('liveTxt');
+  button.disabled=true;
+  if(!document.getElementById('grid').children.length) skeleton();
+  try{
+    const [result,statsRes]=await Promise.all([
+      api('/api/status?'+hostQS()),
+      api('/api/stats?'+hostQS()).catch(()=>null),
+    ]);
+    if(!result.ok) throw new Error(result.error||'状态获取失败');
+    statsMap={};
+    if(statsRes&&statsRes.ok&&Array.isArray(statsRes.stats)){
+      for(const s of statsRes.stats) statsMap[s.name]=s;
+    }
+    render(result.services);live.className='dot live';live.title='后端连接正常';liveTxt.textContent='后端连接正常';
+  }catch(error){
+    live.className='dot down';live.title='后端连接失败';liveTxt.textContent='后端连接失败';
+    toast('状态获取失败: '+error.message,false);
+  }finally{button.disabled=false;}
+}
+function handleCardAction(action,service,id){
+  if(action==='deploy'||action==='rollback') return openAction(action,service,id,true);
+  const label=ACTION_LABELS[action];
+  if(confirm(`确认在 [${currentHost}] ${label} ${service}-${id}？`)) executeAction({action,service,id,host:currentHost});
+}
+function fillServices(selected){
+  const select=document.getElementById('actionService');
+  select.innerHTML=MANAGED.map(s=>`<option value="${s}">${LABELS[s]} (${s})</option>`).join('');
+  select.value=MANAGED.includes(selected)?selected:'platform';
+}
+function openAction(action='deploy',service='platform',id='1',locked=false){
+  currentAction=action;fillServices(service);
+  fillHostSelect('actionHost',currentHost);
+  const select=document.getElementById('actionService'),idInput=document.getElementById('actionId');
+  select.disabled=locked;idInput.disabled=locked;idInput.value=id||'1';
+  document.getElementById('actionImage').value='';
+  const label=ACTION_LABELS[action]||action;
+  document.getElementById('actionTitle').textContent=label+'服务';
+  document.getElementById('actionSubmit').textContent='确认'+label;
+  document.getElementById('imageField').style.display=(action==='deploy'||action==='rollback')?'grid':'none';
+  document.getElementById('actionImage').required=action==='rollback';
+  document.getElementById('imageHint').textContent=action==='rollback'?'回滚必须填写目标镜像版本':'留空时使用 ops.conf 中配置的默认镜像';
+  document.getElementById('actionModal').classList.add('show');
+  setTimeout(()=>document.getElementById(action==='rollback'?'actionImage':'actionService').focus(),0);
+}
+function closeAction(){if(!actionBusy)document.getElementById('actionModal').classList.remove('show');}
+document.getElementById('actionForm').addEventListener('submit',event=>{
+  event.preventDefault();
+  const host=document.getElementById('actionHost').value;
+  const service=document.getElementById('actionService').value,id=document.getElementById('actionId').value,image=document.getElementById('actionImage').value.trim();
+  if(!/^\d{1,3}$/.test(id)||Number(id)<1) return toast('实例 ID 必须是 1-999',false);
+  if(image&&!IMAGE_RE.test(image)) return toast('镜像名包含非法字符',false);
+  if(currentAction==='rollback'&&!image) return toast('回滚必须指定镜像',false);
+  executeAction({action:currentAction,service,id,image,host});
+});
+async function executeAction(payload){
+  if(actionBusy)return;
+  if(!payload.host) payload.host=currentHost;
+  const label=ACTION_LABELS[payload.action]||payload.action,target=`[${payload.host}] ${payload.service}-${payload.id}`;
+  actionBusy=true;document.getElementById('actionSubmit').disabled=true;
+  toast(`正在${label} ${target}…`);
+  try{
+    const result=await api('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    if(!result.ok) throw Object.assign(new Error(result.output||result.error||`${label}失败`),{output:result.output});
+    closeActionForce();toast(`✓ ${label} ${target} 成功`,true);
+    if(result.output) showOutput(`${label} ${target} 成功`,result.output,false);
+    await loadStatus();
+  }catch(error){
+    toast(`✗ ${label} ${target} 失败`,false);
+    showOutput(`${label} ${target} 失败`,error.output||error.message||String(error),false);
+  }finally{actionBusy=false;document.getElementById('actionSubmit').disabled=false;}
+}
+function closeActionForce(){document.getElementById('actionModal').classList.remove('show');}
+function showOutput(title,text,refreshable=false){
+  curLog=refreshable?curLog:null;
+  document.getElementById('outputTitle').textContent=title;
+  document.getElementById('outputBody').textContent=text||'(无输出)';
+  document.getElementById('logRefreshBtn').style.display=refreshable?'inline-flex':'none';
+  document.getElementById('outputModal').classList.add('show');
+}
+function showLog(service,id,name){curLog={service,id,name};showOutput(name+' 日志','加载中…',true);refreshLog();}
+function showInspect(service,id,name){curLog={service,id,name,kind:'inspect'};showOutput(name+' 容器详情','加载中…',true);refreshLog();}
+async function refreshLog(){
+  if(!curLog)return;
+  const body=document.getElementById('outputBody');
+  const isInspect=curLog.kind==='inspect';
+  const path=isInspect
+    ? `/api/inspect?service=${encodeURIComponent(curLog.service)}&id=${encodeURIComponent(curLog.id)}&${hostQS()}`
+    : `/api/logs?service=${encodeURIComponent(curLog.service)}&id=${encodeURIComponent(curLog.id)}&${hostQS()}`;
+  try{
+    const result=await api(path);
+    body.textContent=(isInspect?result.detail:result.log)||(isInspect?'(无详情)':'(无日志)');
+    if(!isInspect) body.scrollTop=body.scrollHeight;
+  }
+  catch(error){body.textContent=(isInspect?'详情获取失败: ':'日志获取失败: ')+error.message;}
+}
+function closeOutput(){document.getElementById('outputModal').classList.remove('show');curLog=null;}
+function toggleAuto(){
+  const btn=document.getElementById('autoBtn');
+  if(autoTimer){clearInterval(autoTimer);autoTimer=null;btn.classList.remove('on');btn.lastChild.textContent='自动刷新';}
+  else{autoTimer=setInterval(loadStatus,5000);btn.classList.add('on');btn.lastChild.textContent='自动刷新: 开';loadStatus();}
+}
+
+/* ---------- 资源占用 (集成到各服务卡片) ---------- */
+function pct(str){ const m=String(str||'').match(/([\d.]+)\s*%/); return m?Math.min(100,parseFloat(m[1])):null; }
+function progClass(p){ if(p==null)return ''; if(p>=85)return 'hot'; if(p>=60)return 'warn'; return ''; }
+function metricBar(label,valText,p){
+  const width=p==null?0:p;
+  return `<div class="metric"><div class="lab"><span>${label}</span><b>${esc(valText||'-')}</b></div>`
+    +`<div class="prog ${progClass(p)}"><span style="width:${width}%"></span></div></div>`;
+}
+
+/* ---------- 主机管理 ---------- */
+function fillHostSelect(elId, selected){
+  const sel=document.getElementById(elId);
+  sel.innerHTML=hostsCache.map(h=>`<option value="${esc(h.name)}">${esc(h.name)}${h.name==='local'?'（本机）':''}</option>`).join('');
+  if(hostsCache.some(h=>h.name===selected)) sel.value=selected;
+}
+async function loadHosts(){
+  try{
+    const res=await api('/api/hosts');
+    hostsCache=res.hosts||[];
+  }catch(e){ hostsCache=[{name:'local',ssh:'local',port:22,note:'控制机本身'}]; }
+  if(!hostsCache.some(h=>h.name===currentHost)) currentHost='local';
+  fillHostSelect('hostSelect',currentHost);
+}
+function onHostChange(){
+  currentHost=document.getElementById('hostSelect').value;
+  toast('已切换到服务器: '+currentHost);
+  loadStatus();
+}
+function openHosts(){ renderHostList(); document.getElementById('hostsModal').classList.add('show'); }
+function closeHosts(){ document.getElementById('hostsModal').classList.remove('show'); }
+function renderHostList(){
+  const box=document.getElementById('hostList');
+  box.innerHTML=hostsCache.map(h=>{
+    const isLocal=h.name==='local';
+    const del=isLocal?'':`<button class="btn sm err" type="button" data-del="${esc(h.name)}">删除</button>`;
+    const test=`<button class="btn sm" type="button" data-test="${esc(h.name)}">测试</button>`;
+    return `<div class="hostrow ${isLocal?'is-local':''}"><div class="grow"><div class="hn">${esc(h.name)}</div><div class="ha">${esc(h.ssh)}${h.port&&h.port!=22?(' :'+esc(h.port)):''}${h.note?(' · '+esc(h.note)):''}</div></div>${isLocal?'<span class="tag">本机</span>':''}${test}${del}</div>`;
+  }).join('');
+  box.querySelectorAll('[data-del]').forEach(b=>b.addEventListener('click',()=>deleteHost(b.dataset.del)));
+  box.querySelectorAll('[data-test]').forEach(b=>b.addEventListener('click',()=>testExistingHost(b.dataset.test,b)));
+}
+async function testExistingHost(name,btn){
+  const old=btn.textContent;btn.disabled=true;btn.textContent='测试中…';
+  try{
+    const res=await api('/api/hosts/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+    toast((res.ok?'✓ ':'✗ ')+name+': '+(res.output||''),res.ok);
+  }catch(e){ toast('测试失败: '+e.message,false); }
+  finally{ btn.disabled=false;btn.textContent=old; }
+}
+async function testNewHost(){
+  const ssh=document.getElementById('hostSsh').value.trim();
+  const port=Number(document.getElementById('hostPort').value)||22;
+  if(!ssh) return toast('请先填写 SSH 地址',false);
+  const btn=document.getElementById('hostTestBtn'),old=btn.textContent;
+  btn.disabled=true;btn.textContent='测试中…';
+  try{
+    const res=await api('/api/hosts/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ssh,port})});
+    toast((res.ok?'✓ ':'✗ ')+(res.output||''),res.ok);
+  }catch(e){ toast('测试失败: '+e.message,false); }
+  finally{ btn.disabled=false;btn.textContent=old; }
+}
+document.getElementById('hostForm').addEventListener('submit',async event=>{
+  event.preventDefault();
+  const name=document.getElementById('hostName').value.trim();
+  const ssh=document.getElementById('hostSsh').value.trim();
+  const port=Number(document.getElementById('hostPort').value)||22;
+  const note=document.getElementById('hostNote').value.trim();
+  if(!/^[A-Za-z0-9_-]{1,40}$/.test(name)) return toast('主机名只能是字母/数字/-/_，长度 1-40',false);
+  if(!ssh) return toast('请填写 SSH 地址',false);
+  const btn=document.getElementById('hostAddBtn');btn.disabled=true;
+  try{
+    await api('/api/hosts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,ssh,port,note})});
+    toast('✓ 已添加服务器 '+name,true);
+    document.getElementById('hostForm').reset();
+    document.getElementById('hostPort').value=22;
+    await loadHosts();renderHostList();
+  }catch(e){ toast('添加失败: '+e.message,false); }
+  finally{ btn.disabled=false; }
+});
+async function deleteHost(name){
+  if(!confirm(`确认删除服务器 ${name}？（不会影响该机上的容器）`)) return;
+  try{
+    await api('/api/hosts?name='+encodeURIComponent(name),{method:'DELETE'});
+    toast('已删除 '+name,true);
+    if(currentHost===name) currentHost='local';
+    await loadHosts();renderHostList();loadStatus();
+  }catch(e){ toast('删除失败: '+e.message,false); }
+}
+
+/* ---------- 登录认证 ---------- */
+function showLogin(){
+  if(autoTimer){clearInterval(autoTimer);autoTimer=null;document.getElementById('autoBtn').classList.remove('on');}
+  document.getElementById('login').classList.add('show');
+  setTimeout(()=>document.getElementById('loginPw').focus(),50);
+}
+function hideLogin(){ document.getElementById('login').classList.remove('show'); }
+document.getElementById('loginForm').addEventListener('submit',async event=>{
+  event.preventDefault();
+  const pw=document.getElementById('loginPw').value;
+  const btn=document.getElementById('loginBtn');btn.disabled=true;
+  try{
+    const res=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pw})});
+    if(res.ok){ document.getElementById('loginPw').value='';hideLogin();await boot(); }
+    else{ const d=await res.json().catch(()=>({}));toast(d.error||'登录失败',false); }
+  }catch(e){ toast('登录失败: '+e.message,false); }
+  finally{ btn.disabled=false; }
+});
+async function logout(){
+  try{ await fetch('/api/logout',{method:'POST'}); }catch(_){}
+  showLogin();
+}
+
+/* ---------- 初始化 ---------- */
+async function boot(){
+  await loadHosts();
+  fillHostSelect('hostSelect',currentHost);
+  loadStatus();
+}
+async function init(){
+  try{
+    const me=await (await fetch('/api/me')).json();
+    if(me.authed){ hideLogin();await boot(); }
+    else showLogin();
+  }catch(e){ showLogin(); }
+}
+
+for(const id of ['actionModal','outputModal','hostsModal']) document.getElementById(id).addEventListener('click',event=>{if(event.target.id===id){if(id==='actionModal')closeAction();else if(id==='hostsModal')closeHosts();else closeOutput();}});
+document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeAction();closeOutput();closeHosts();}});
+init();
+</script>
+</body>
+</html>

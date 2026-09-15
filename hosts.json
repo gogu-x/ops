@@ -1,0 +1,8 @@
+[
+  {
+    "name": "local",
+    "ssh": "local",
+    "port": 22,
+    "note": "控制机本身"
+  }
+]

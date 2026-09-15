@@ -1,0 +1,361 @@
+#!/usr/bin/env bash
+# ============================================================
+# ops - 游戏服务部署工具 (Docker)
+#
+# 用法:
+#   ops [--host <name>] <命令> ...        指定目标主机(默认 local)
+#   ops start   <service|all> [id]        启动服务
+#   ops stop    <service|all> [id]        停止并移除容器
+#   ops restart <service|all> [id]        重启
+#   ops deploy  <service> [id] [image]    部署/更新 (停旧 -> 起新)
+#   ops rollback <service> <image> [id]   回滚到指定镜像版本
+#   ops status  [--json]                  查看所有服务状态
+#   ops stats   [--json]                  查看容器 CPU/内存等资源占用
+#   ops logs    <service> [id] [-f]       查看日志
+#   ops inspect <service> [id]            查看容器详细信息
+#   ops host-check                        测试目标主机 docker 连通性
+#   ops config                            打印当前配置
+#
+# 说明:
+#   service : platform | gate | game | battle
+#   id      : 服务实例编号 (server-id/gate-id/node-id), 默认 1
+#   image   : 可选, 覆盖 ops.conf 里的默认镜像 tag
+# ============================================================
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONF="${OPS_CONF:-$SCRIPT_DIR/ops.conf}"
+HOSTS_FILE="${OPS_HOSTS:-$SCRIPT_DIR/hosts.json}"
+
+if [[ ! -f "$CONF" ]]; then
+  echo "错误: 找不到配置文件 $CONF" >&2
+  exit 1
+fi
+# shellcheck source=/dev/null
+source "$CONF"
+
+# ---------- 多主机执行器 ----------
+# OPS_HOST: 目标主机名(来自 hosts.json 的 name), 默认 local
+# 解析出的 SSH 地址: local 表示本机执行, 否则 ssh 到该地址
+OPS_HOST="local"
+HOST_SSH="local"           # local | user@ip
+HOST_PORT="22"
+
+# 从 hosts.json 里取某主机的 ssh 地址和端口 (纯文本解析, 不依赖 jq)
+# hosts.json 结构: [{"name":"..","ssh":"user@ip","port":22,"note":".."}, ...]
+resolve_host() {
+  local want="$1"
+  [[ "$want" == "local" ]] && { HOST_SSH="local"; HOST_PORT="22"; return 0; }
+  [[ -f "$HOSTS_FILE" ]] || die "主机配置不存在: $HOSTS_FILE"
+  # 用 python3 解析 json, 输出 "ssh\tport"; 找不到则空
+  local line
+  line="$(python3 - "$HOSTS_FILE" "$want" <<'PY' 2>/dev/null
+import json, sys
+try:
+    hosts = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+for h in hosts:
+    if h.get("name") == sys.argv[2]:
+        print("%s\t%s" % (h.get("ssh", ""), h.get("port", 22)))
+        break
+PY
+)"
+  [[ -z "$line" ]] && die "未知主机: $want"
+  HOST_SSH="${line%%$'\t'*}"
+  HOST_PORT="${line##*$'\t'}"
+  [[ -z "$HOST_SSH" ]] && die "主机 $want 缺少 ssh 地址"
+}
+
+# 统一 docker 执行器: 覆盖 docker 命令, 按 OPS_HOST 决定本地或远程执行
+# 远程时对每个参数做 shell 转义, 避免注入/空格问题
+docker() {
+  if [[ "$HOST_SSH" == "local" ]]; then
+    command docker "$@"
+  else
+    local q="" a
+    for a in "$@"; do q+=" $(printf '%q' "$a")"; done
+    ssh -p "$HOST_PORT" \
+        -o BatchMode=yes \
+        -o StrictHostKeyChecking=accept-new \
+        -o ConnectTimeout=8 \
+        "$HOST_SSH" "docker$q"
+  fi
+}
+
+# ---------- 输出辅助 ----------
+c_red()   { printf '\033[31m%s\033[0m\n' "$*"; }
+c_grn()   { printf '\033[32m%s\033[0m\n' "$*"; }
+c_ylw()   { printf '\033[33m%s\033[0m\n' "$*"; }
+info()    { c_grn "[ops] $*"; }
+warn()    { c_ylw "[ops] $*"; }
+err()     { c_red  "[ops] $*" >&2; }
+die()     { err "$*"; exit 1; }
+
+# 校验 service 名是否合法
+valid_service() {
+  local s="$1"
+  for x in $SERVICES; do [[ "$x" == "$s" ]] && return 0; done
+  return 1
+}
+
+# 取某服务的默认镜像
+image_of() {
+  case "$1" in
+    platform) echo "$IMG_PLATFORM" ;;
+    gate)     echo "$IMG_GATE" ;;
+    game)     echo "$IMG_GAME" ;;
+    battle)   echo "$IMG_BATTLE" ;;
+    *) die "未知服务: $1" ;;
+  esac
+}
+
+# 容器名: <service>-<id>
+cname() { echo "$1-$2"; }
+
+# 生成某服务的启动参数 (对应各服务二进制的命令行)
+# $1=service  $2=id
+build_args() {
+  local svc="$1" id="$2"
+  local common="--node-id $id --etcd $ETCD --nats-url $NATS_URL"
+  local mongo="--mongo-url $MONGO_URL --mongo-username $MONGO_USER --mongo-password $MONGO_PASS"
+  local gconf="--gconf-db-uri $GCONF_DB_URI --gconf-db $GCONF_DB"
+  case "$svc" in
+    platform)
+      echo "--server-id $id $common $mongo"
+      ;;
+    gate)
+      echo "--gate-id $id $common --gate-base-port 8000 --grpc-host $(cname gate $id) --platform-grpc-addr $PLATFORM_GRPC_ADDR"
+      ;;
+    game)
+      echo "--server-id $id $common --grpc-host $(cname game $id) $mongo --platform-grpc-addr $PLATFORM_GRPC_ADDR $gconf"
+      ;;
+    battle)
+      echo "--server-id $id $common $mongo --platform-grpc-addr $PLATFORM_GRPC_ADDR $gconf"
+      ;;
+  esac
+}
+
+# 生成端口映射参数。端口规则基于观测: gate=800id, game=900id, platform=7000-7001, battle 仅内部
+# $1=service $2=id
+build_ports() {
+  local svc="$1" id="$2"
+  case "$svc" in
+    platform) echo "-p 7000-7001:7000-7001" ;;   # id>1 时端口会冲突, 见 note
+    gate)     echo "-p $((8000 + id)):$((8000 + id))" ;;
+    game)     echo "-p $((9000 + id)):$((9000 + id))" ;;
+    battle)   echo "" ;;   # battle 只暴露容器内 10901, 不映射到宿主
+  esac
+}
+
+# ---------- 命令实现 ----------
+
+do_start() {
+  local svc="$1" id="${2:-1}" image="${3:-}"
+  valid_service "$svc" || die "未知服务: $svc (可选: $SERVICES)"
+  [[ -z "$image" ]] && image="$(image_of "$svc")"
+  local name; name="$(cname "$svc" "$id")"
+  local args ports
+  args="$(build_args "$svc" "$id")"
+  ports="$(build_ports "$svc" "$id")"
+
+  if docker ps -a --format '{{.Names}}' | grep -qx "$name"; then
+    warn "$name 已存在, 先移除旧容器"
+    docker rm -f "$name" >/dev/null
+  fi
+
+  info "启动 $name  (镜像: $image)"
+  # shellcheck disable=SC2086
+  docker run -d \
+    --name "$name" \
+    --network "$NETWORK" \
+    --restart "$RESTART_POLICY" \
+    $ports \
+    "$image" \
+    $args >/dev/null
+  c_grn "  -> 已启动 $name"
+}
+
+do_stop() {
+  local svc="$1" id="${2:-1}"
+  local name; name="$(cname "$svc" "$id")"
+  if docker ps -a --format '{{.Names}}' | grep -qx "$name"; then
+    info "停止并移除 $name"
+    docker rm -f "$name" >/dev/null
+    c_grn "  -> 已移除 $name"
+  else
+    warn "$name 不存在, 跳过"
+  fi
+}
+
+do_restart() {
+  local svc="$1" id="${2:-1}"
+  do_stop "$svc" "$id"
+  do_start "$svc" "$id"
+}
+
+do_deploy() {
+  local svc="$1" id="${2:-1}" image="${3:-}"
+  valid_service "$svc" || die "未知服务: $svc"
+  [[ -z "$image" ]] && image="$(image_of "$svc")"
+  info "部署 $svc-$id -> $image"
+  do_start "$svc" "$id" "$image"
+}
+
+do_rollback() {
+  local svc="$1" image="${2:-}" id="${3:-1}"
+  [[ -z "$image" ]] && die "rollback 需要指定镜像版本, 例: ops rollback game gogs-game:v1001-2"
+  info "回滚 $svc-$id -> $image"
+  do_start "$svc" "$id" "$image"
+}
+
+do_status() {
+  local json="${1:-}"
+  if [[ "$json" == "--json" ]]; then
+    docker ps -a \
+      --filter "network=$NETWORK" \
+      --format '{"name":"{{.Names}}","image":"{{.Image}}","state":"{{.State}}","status":"{{.Status}}","ports":"{{.Ports}}"}' \
+      | paste -sd, - | sed 's/^/[/; s/$/]/'
+    return
+  fi
+  echo "服务状态 (network=$NETWORK):"
+  docker ps -a --filter "network=$NETWORK" \
+    --format 'table {{.Names}}\t{{.Image}}\t{{.State}}\t{{.Status}}\t{{.Ports}}'
+}
+
+do_stats() {
+  local json="${1:-}"
+  # 取本网络下的容器名(仅运行中的才有实时资源数据)
+  local names
+  names="$(docker ps --filter "network=$NETWORK" --format '{{.Names}}')"
+  if [[ -z "$names" ]]; then
+    if [[ "$json" == "--json" ]]; then echo "[]"; else echo "当前没有运行中的容器 (network=$NETWORK)"; fi
+    return
+  fi
+  # shellcheck disable=SC2086
+  if [[ "$json" == "--json" ]]; then
+    # 每行输出一个容器的 JSON, 再用 paste 合并成数组
+    docker stats --no-stream --no-trunc \
+      --format '{"name":"{{.Name}}","cpu":"{{.CPUPerc}}","mem":"{{.MemUsage}}","memPerc":"{{.MemPerc}}","netIO":"{{.NetIO}}","blockIO":"{{.BlockIO}}","pids":"{{.PIDs}}"}' \
+      $names | paste -sd, - | sed 's/^/[/; s/$/]/'
+    return
+  fi
+  echo "资源占用 (network=$NETWORK):"
+  docker stats --no-stream \
+    --format 'table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}\t{{.NetIO}}\t{{.BlockIO}}\t{{.PIDs}}' \
+    $names
+}
+
+do_logs() {
+  local svc="$1"; shift || true
+  local id=1 follow=""
+  for a in "$@"; do
+    case "$a" in
+      -f|--follow) follow="-f" ;;
+      *[0-9]*)     [[ "$a" =~ ^[0-9]+$ ]] && id="$a" ;;
+    esac
+  done
+  local name; name="$(cname "$svc" "$id")"
+  docker ps -a --format '{{.Names}}' | grep -qx "$name" || die "$name 不存在"
+  # shellcheck disable=SC2086
+  docker logs --timestamps --tail 200 $follow "$name" 2>&1
+}
+
+do_inspect() {
+  local svc="$1" id="${2:-1}"
+  local name; name="$(cname "$svc" "$id")"
+  docker ps -a --format '{{.Names}}' | grep -qx "$name" || die "$name 不存在"
+  # 用 docker inspect 提取常用字段, 以易读文本输出
+  docker inspect "$name" --format '容器名称:   {{.Name}}
+容器 ID:    {{.Id}}
+镜像:       {{.Config.Image}}
+镜像 ID:    {{.Image}}
+状态:       {{.State.Status}}
+启动时间:   {{.State.StartedAt}}
+创建时间:   {{.Created}}
+重启次数:   {{.RestartCount}}
+重启策略:   {{.HostConfig.RestartPolicy.Name}}
+退出码:     {{.State.ExitCode}}
+PID:        {{.State.Pid}}
+
+--- 环境变量 ---
+{{join .Config.Cmd " "}}
+
+--- 网络 ---{{range $net, $conf := .NetworkSettings.Networks}}
+网络:       {{$net}}
+  IP 地址:  {{$conf.IPAddress}}
+  MAC:      {{$conf.MacAddress}}{{end}}
+
+--- 端口映射 ---{{range $p, $b := .NetworkSettings.Ports}}
+{{$p}}{{if $b}}{{range $b}} -> {{.HostIp}}:{{.HostPort}}{{end}}{{else}} (未映射){{end}}{{end}}
+
+--- 挂载 ---{{range .Mounts}}
+{{.Source}} -> {{.Destination}} ({{.Mode}}){{end}}
+
+--- 容器环境变量 ---{{range .Config.Env}}
+{{.}}{{end}}' 2>&1 | sed 's/ --\([a-zA-Z]\)/\n--\1/g'
+}
+
+do_config() {
+  echo "配置文件: $CONF"
+  echo "网络:     $NETWORK"
+  echo "服务清单: $SERVICES"
+  echo "镜像:"
+  for s in $SERVICES; do printf '  %-9s %s\n' "$s" "$(image_of "$s")"; done
+}
+
+# ---------- 参数分发 ----------
+usage() { sed -n '2,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+
+# 解析全局 --host <name> (可出现在命令前)
+while [[ "${1:-}" == "--host" ]]; do
+  shift
+  OPS_HOST="${1:-local}"; shift || true
+done
+resolve_host "$OPS_HOST"
+
+[[ $# -eq 0 ]] && { usage; exit 0; }
+cmd="$1"; shift || true
+
+case "$cmd" in
+  start|stop|restart)
+    target="${1:-}"; id="${2:-1}"
+    [[ -z "$target" ]] && die "用法: ops $cmd <service|all> [id]"
+    if [[ "$target" == "all" ]]; then
+      for s in $SERVICES; do "do_$cmd" "$s" "$id"; done
+    else
+      valid_service "$target" || die "未知服务: $target (可选: $SERVICES all)"
+      "do_$cmd" "$target" "$id"
+    fi
+    ;;
+  deploy)   do_deploy "$@" ;;
+  rollback) do_rollback "$@" ;;
+  status)   do_status "${1:-}" ;;
+  stats)    do_stats "${1:-}" ;;
+  logs)
+    [[ -z "${1:-}" ]] && die "用法: ops logs <service> [id] [-f]"
+    do_logs "$@"
+    ;;
+  inspect)
+    [[ -z "${1:-}" ]] && die "用法: ops inspect <service> [id]"
+    svc="$1"; id="${2:-1}"
+    valid_service "$svc" || die "未知服务: $svc (可选: $SERVICES)"
+    do_inspect "$svc" "$id"
+    ;;
+  host-check)
+    # 测试目标主机连通性: 输出 docker 版本, 成功返回 0
+    if [[ "$HOST_SSH" == "local" ]]; then
+      out="$(command docker version --format '{{.Server.Version}}' 2>&1)" \
+        && c_grn "本机 docker 正常 (server $out)" \
+        || die "本机 docker 不可用: $out"
+    else
+      out="$(ssh -p "$HOST_PORT" -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8 \
+             "$HOST_SSH" "docker version --format '{{.Server.Version}}'" 2>&1)" \
+        && c_grn "连接成功: $HOST_SSH (docker server $out)" \
+        || die "连接失败: $out"
+    fi
+    ;;
+  config)   do_config ;;
+  -h|--help|help) usage ;;
+  *) die "未知命令: $cmd (运行 'ops help' 查看用法)" ;;
+esac

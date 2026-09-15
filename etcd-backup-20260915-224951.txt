@@ -1,0 +1,6 @@
+/game/server/1/1 = game-1:9901
+/game/server/1/78240 = 127.0.0.1:9901
+/game/server/2/1 = game-2:9902
+/game/server/2/2 = game-2:9902
+/services/Battle/1/1 = 127.0.0.1:10901
+/services/Battle/2/1 = 127.0.0.1:10901
