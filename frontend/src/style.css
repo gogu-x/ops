@@ -1,0 +1,22 @@
+* { box-sizing: border-box; }
+html, body, #app { margin: 0; min-height: 100%; font-family: Inter, "Microsoft YaHei", sans-serif; color: #1f2937; }
+body { background: #f3f6fb; }
+.auth-page { min-height: 100vh; display: grid; place-items: center; background: linear-gradient(135deg, #e8f1ff, #f7f9fc); }
+.login-card { width: 390px; border: 0; }
+.brand { text-align: center; margin-bottom: 26px; }
+.brand h1 { margin: 0 0 8px; color: #2563eb; }
+.brand p { margin: 0; color: #64748b; }
+.full-width { width: 100%; }
+.app-shell { min-height: 100vh; }
+.topbar { display: flex; align-items: center; justify-content: space-between; background: #fff; border-bottom: 1px solid #e5e7eb; }
+.topbar strong { color: #2563eb; font-size: 18px; }
+.topbar-right { display: flex; align-items: center; gap: 18px; color: #64748b; }
+.sidebar { background: #fff; border-right: 1px solid #e5e7eb; }
+.sidebar .el-menu { border-right: 0; }
+.content { padding: 28px; }
+.page-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+.page-heading h2 { margin: 0 0 6px; }
+.page-heading p { margin: 0; color: #64748b; }
+.metric { font-size: 32px; font-weight: 700; margin-bottom: 8px; color: #2563eb; }
+
+.dashboard-card { cursor: pointer; }
