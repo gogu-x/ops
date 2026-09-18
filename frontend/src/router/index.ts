@@ -3,6 +3,7 @@ import Login from '../views/Login.vue'
 import Home from '../views/Home.vue'
 import Hosts from '../views/Hosts.vue'
 import Services from '../views/Services.vue'
+import Projects from '../views/Projects.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -11,6 +12,7 @@ const router = createRouter({
     { path: '/', component: Home },
     { path: '/hosts', component: Hosts },
     { path: '/services', component: Services },
+    { path: '/projects', component: Projects },
   ],
 })
 

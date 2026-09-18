@@ -1,13 +1,24 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
 import axios from 'axios'
-import { useAuthStore } from '../stores/auth'
+import { Monitor, Grid, FolderOpened, DataLine, CircleCheck, Warning, CircleClose } from '@element-plus/icons-vue'
+import AppLayout from '../components/AppLayout.vue'
+import { hostApi } from '../api/hosts'
+import { serviceApi } from '../api/services'
+import { projectApi } from '../api/projects'
 
 const router = useRouter()
-const auth = useAuthStore()
-const backendStatus = ref('检查中')
+const backendStatus = ref<'检查中' | '正常' | '异常' | '不可用'>('检查中')
+const hostCount = ref<number | null>(null)
+const serviceCount = ref<number | null>(null)
+const projectCount = ref<number | null>(null)
+
+const statusTagType = () => {
+  if (backendStatus.value === '正常') return 'success'
+  if (backendStatus.value === '检查中') return 'info'
+  return 'danger'
+}
 
 onMounted(async () => {
   try {
@@ -16,47 +27,139 @@ onMounted(async () => {
   } catch {
     backendStatus.value = '不可用'
   }
+
+  try {
+    const projects = await projectApi.list()
+    projectCount.value = projects.length
+  } catch {
+    projectCount.value = null
+  }
+
+  try {
+    const services = await serviceApi.list()
+    serviceCount.value = services.length
+  } catch {
+    serviceCount.value = null
+  }
+
+  try {
+    const hosts = await hostApi.list()
+    hostCount.value = hosts.length
+  } catch {
+    hostCount.value = null
+  }
 })
-
-async function logout() {
-  await auth.logout()
-  await router.push('/login')
-}
-
-function comingSoon() {
-  ElMessage.info('服务管理模块将在下一阶段接入 Docker API')
-}
 </script>
 
 <template>
-  <el-container class="app-shell">
-    <el-header class="topbar">
-      <strong>Ops Platform</strong>
-      <div class="topbar-right">
-        <span>{{ auth.user?.username }} / {{ auth.user?.role }}</span>
-        <el-button link type="primary" @click="logout">退出</el-button>
+  <AppLayout>
+    <div class="page-heading">
+      <div>
+        <h2>控制台</h2>
+        <p>欢迎回来，这里是 Ops Platform 运维平台总览，服务管理是核心操作入口，主机仅作为部署载体。</p>
       </div>
-    </el-header>
-    <el-container>
-      <el-aside width="220px" class="sidebar">
-        <el-menu default-active="dashboard">
-          <el-menu-item index="dashboard">控制台</el-menu-item>
-          <el-menu-item index="hosts" @click="router.push('/hosts')">主机管理</el-menu-item>
-          <el-menu-item index="services" @click="router.push('/services')">服务类型</el-menu-item>
-          <el-menu-item index="audit" @click="comingSoon">审计日志</el-menu-item>
-        </el-menu>
-      </el-aside>
-      <el-main class="content">
-        <div class="page-heading">
-          <div><h2>控制台</h2><p>后端基础骨架已运行，业务模块按简化架构逐步接入。</p></div>
-          <el-tag type="success">后端 {{ backendStatus }}</el-tag>
-        </div>
-        <el-row :gutter="20">
-          <el-col :span="8"><el-card><template #header>主机</template><div class="metric">—</div><span>等待 Docker 主机管理模块</span></el-card></el-col>
-          <el-col :span="8"><el-card class="dashboard-card" shadow="hover" @click="router.push('/services')"><template #header>服务类型</template><div class="metric">配置</div><el-button link type="primary" @click.stop="router.push('/services')">打开服务类型管理 →</el-button></el-card></el-col>
-          <el-col :span="8"><el-card><template #header>操作任务</template><div class="metric">—</div><span>等待部署操作模块</span></el-card></el-col>
-        </el-row>
-      </el-main>
-    </el-container>
-  </el-container>
+      <el-tag :type="statusTagType()" effect="light" round size="large">
+        <el-icon style="vertical-align: -2px; margin-right: 4px">
+          <component :is="backendStatus === '正常' ? CircleCheck : backendStatus === '检查中' ? Warning : CircleClose" />
+        </el-icon>
+        后端服务 {{ backendStatus }}
+      </el-tag>
+    </div>
+
+    <el-row :gutter="20">
+      <el-col :span="8">
+        <el-card class="stat-card is-clickable" shadow="never" @click="router.push('/services')">
+          <div class="stat-card-head">
+            <span>项目数量</span>
+            <span class="stat-icon blue"><el-icon><FolderOpened /></el-icon></span>
+          </div>
+          <div class="metric">{{ projectCount ?? '—' }}</div>
+          <div class="stat-foot">
+            <span>按业务项目分类管理服务</span>
+            <el-icon><DataLine /></el-icon>
+          </div>
+        </el-card>
+      </el-col>
+      <el-col :span="8">
+        <el-card class="stat-card is-clickable" shadow="never" @click="router.push('/services')">
+          <div class="stat-card-head">
+            <span>服务类型</span>
+            <span class="stat-icon green"><el-icon><Grid /></el-icon></span>
+          </div>
+          <div class="metric">{{ serviceCount ?? '—' }}</div>
+          <div class="stat-foot">
+            <span>已配置镜像与参数模板</span>
+            <el-icon><DataLine /></el-icon>
+          </div>
+        </el-card>
+      </el-col>
+      <el-col :span="8">
+        <el-card class="stat-card is-clickable" shadow="never" @click="router.push('/hosts')">
+          <div class="stat-card-head">
+            <span>主机数量</span>
+            <span class="stat-icon orange"><el-icon><Monitor /></el-icon></span>
+          </div>
+          <div class="metric">{{ hostCount ?? '—' }}</div>
+          <div class="stat-foot">
+            <span>基础设施 · 部署载体</span>
+            <el-icon><DataLine /></el-icon>
+          </div>
+        </el-card>
+      </el-col>
+    </el-row>
+
+    <el-card class="ops-card" shadow="never" style="margin-top: 20px">
+      <template #header>快速入口</template>
+      <el-row :gutter="16">
+        <el-col :span="12">
+          <div class="quick-entry" @click="router.push('/services')">
+            <el-icon :size="20" color="#52c41a"><Grid /></el-icon>
+            <div>
+              <div class="quick-entry-title">服务管理</div>
+              <div class="quick-entry-desc">按项目分类管理服务、配置镜像与启动参数</div>
+            </div>
+          </div>
+        </el-col>
+        <el-col :span="12">
+          <div class="quick-entry" @click="router.push('/hosts')">
+            <el-icon :size="20" color="#8c8c8c"><Monitor /></el-icon>
+            <div>
+              <div class="quick-entry-title">基础设施</div>
+              <div class="quick-entry-desc">添加 / 测试 Docker 主机连接</div>
+            </div>
+          </div>
+        </el-col>
+      </el-row>
+    </el-card>
+  </AppLayout>
 </template>
+
+<style scoped>
+.quick-entry {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--ops-border);
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.quick-entry:hover {
+  border-color: var(--ops-primary);
+  background: var(--ops-primary-light);
+}
+
+.quick-entry-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--ops-text);
+}
+
+.quick-entry-desc {
+  font-size: 12px;
+  color: var(--ops-text-secondary);
+  margin-top: 2px;
+}
+</style>

@@ -12,23 +12,22 @@ import (
 func TestServiceTypeLifecycle(t *testing.T) {
 	a := NewActor(conf.Config{})
 	created, err := a.create(model.ServiceType{
-		HostID: "host-1",
-		Name:   "game",
-		Image:  "gogs-game:v1",
-		Params: []model.ServiceParam{{Flag: "--server-id", Value: "{{id}}"}},
+		ProjectID: "project-1",
+		HostID:    "host-1",
+		Name:      "game",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.ID == "" || len(created.Params) != 1 {
+	if created.ID == "" {
 		t.Fatalf("unexpected service type: %+v", created)
 	}
-	if _, err := a.create(model.ServiceType{HostID: "host-1", Name: "game", Image: "gogs-game:v2"}); !errors.Is(err, ErrAlreadyExists) {
+	if _, err := a.create(model.ServiceType{ProjectID: "project-1", HostID: "host-1", Name: "game"}); !errors.Is(err, ErrAlreadyExists) {
 		t.Fatalf("expected duplicate error, got %v", err)
 	}
-	created.Image = "gogs-game:v2"
+	created.Name = "game"
 	updated, err := a.update(created)
-	if err != nil || updated.Image != "gogs-game:v2" {
+	if err != nil || updated.Name != "game" {
 		t.Fatalf("update failed: %+v %v", updated, err)
 	}
 	if err := a.repo.Delete(context.Background(), created.ID); err != nil {
@@ -37,10 +36,10 @@ func TestServiceTypeLifecycle(t *testing.T) {
 }
 
 func TestServiceTypeValidation(t *testing.T) {
-	if err := validate(model.ServiceType{HostID: "host-1", Name: "Game", Image: "image"}); err == nil {
-		t.Fatal("expected lowercase name validation error")
+	if err := validate(model.ServiceType{HostID: "host-1", Name: "game"}); err == nil {
+		t.Fatal("expected project_id validation error")
 	}
-	if err := validate(model.ServiceType{HostID: "host-1", Name: "game", Image: "image", Params: []model.ServiceParam{{Flag: "server-id", Value: "1"}}}); err == nil {
-		t.Fatal("expected flag validation error")
+	if err := validate(model.ServiceType{ProjectID: "project-1", HostID: "host-1", Name: "Game"}); err == nil {
+		t.Fatal("expected lowercase name validation error")
 	}
 }

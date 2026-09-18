@@ -8,6 +8,8 @@ import (
 	"github.com/gogu-x/ops/conf"
 	"github.com/gogu-x/ops/ops"
 	"github.com/gogu-x/ops/ops/host"
+	"github.com/gogu-x/ops/ops/instance"
+	"github.com/gogu-x/ops/ops/project"
 	"github.com/gogu-x/ops/ops/service"
 	"github.com/gogu-x/tree"
 	"github.com/urfave/cli/v3"
@@ -16,7 +18,7 @@ import (
 func main() {
 	cmd := &cli.Command{
 		Name:  "ops",
-		Usage: "Go + Vue3 operations platform",
+		Usage: "ops platform",
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "addr", Usage: "HTTP listen address", Sources: cli.EnvVars("OPS_ADDR")},
 			&cli.StringFlag{Name: "mongo-uri", Usage: "MongoDB URI", Sources: cli.EnvVars("OPS_MONGO_URI")},
@@ -33,7 +35,7 @@ func main() {
 			if c.IsSet("jwt-secret") {
 				cfg.JWTSecret = c.String("jwt-secret")
 			}
-			tree.Spawn(ops.NewPos(cfg), host.NewActor(cfg), service.NewActor(cfg))
+			tree.Spawn(ops.NewPos(cfg), host.NewActor(cfg), project.NewActor(cfg), service.NewActor(cfg), instance.NewActor(cfg))
 			tree.Default().Start()
 			return nil
 		},

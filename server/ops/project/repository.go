@@ -1,4 +1,4 @@
-package service
+package project
 
 import (
 	"context"
@@ -14,52 +14,52 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
-var ErrNotFound = errors.New("service type not found")
-var ErrAlreadyExists = errors.New("service type already exists")
+var ErrNotFound = errors.New("project not found")
+var ErrAlreadyExists = errors.New("project already exists")
 
 type Repository interface {
-	List(ctx context.Context) ([]model.ServiceType, error)
-	Get(ctx context.Context, id string) (model.ServiceType, error)
-	Create(ctx context.Context, item model.ServiceType) error
-	Update(ctx context.Context, item model.ServiceType) error
+	List(ctx context.Context) ([]model.Project, error)
+	Get(ctx context.Context, id string) (model.Project, error)
+	Create(ctx context.Context, item model.Project) error
+	Update(ctx context.Context, item model.Project) error
 	Delete(ctx context.Context, id string) error
 	Close(ctx context.Context) error
 }
 
 type MemoryRepository struct {
 	mu    sync.RWMutex
-	items map[string]model.ServiceType
+	items map[string]model.Project
 }
 
 func NewMemoryRepository() *MemoryRepository {
-	return &MemoryRepository{items: make(map[string]model.ServiceType)}
+	return &MemoryRepository{items: make(map[string]model.Project)}
 }
 
-func (r *MemoryRepository) List(context.Context) ([]model.ServiceType, error) {
+func (r *MemoryRepository) List(context.Context) ([]model.Project, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	result := make([]model.ServiceType, 0, len(r.items))
+	result := make([]model.Project, 0, len(r.items))
 	for _, item := range r.items {
 		result = append(result, item)
 	}
 	return result, nil
 }
 
-func (r *MemoryRepository) Get(_ context.Context, id string) (model.ServiceType, error) {
+func (r *MemoryRepository) Get(_ context.Context, id string) (model.Project, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	item, ok := r.items[id]
 	if !ok {
-		return model.ServiceType{}, ErrNotFound
+		return model.Project{}, ErrNotFound
 	}
 	return item, nil
 }
 
-func (r *MemoryRepository) Create(_ context.Context, item model.ServiceType) error {
+func (r *MemoryRepository) Create(_ context.Context, item model.Project) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, existing := range r.items {
-		if existing.ProjectID == item.ProjectID && existing.HostID == item.HostID && existing.Name == item.Name {
+		if existing.Name == item.Name {
 			return ErrAlreadyExists
 		}
 	}
@@ -67,14 +67,14 @@ func (r *MemoryRepository) Create(_ context.Context, item model.ServiceType) err
 	return nil
 }
 
-func (r *MemoryRepository) Update(_ context.Context, item model.ServiceType) error {
+func (r *MemoryRepository) Update(_ context.Context, item model.Project) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.items[item.ID]; !ok {
 		return ErrNotFound
 	}
 	for id, existing := range r.items {
-		if id != item.ID && existing.ProjectID == item.ProjectID && existing.HostID == item.HostID && existing.Name == item.Name {
+		if id != item.ID && existing.Name == item.Name {
 			return ErrAlreadyExists
 		}
 	}
@@ -112,34 +112,34 @@ func NewMongoRepository(ctx context.Context, cfg conf.Config) (*MongoRepository,
 		_ = client.Disconnect(context.Background())
 		return nil, err
 	}
-	return &MongoRepository{client: client, items: client.Database(cfg.MongoDatabase).Collection("service_types")}, nil
+	return &MongoRepository{client: client, items: client.Database(cfg.MongoDatabase).Collection("projects")}, nil
 }
 
-func (r *MongoRepository) List(ctx context.Context) ([]model.ServiceType, error) {
+func (r *MongoRepository) List(ctx context.Context) ([]model.Project, error) {
 	cursor, err := r.items.Find(ctx, bson.M{})
 	if err != nil {
 		return nil, err
 	}
 	defer cursor.Close(ctx)
-	var result []model.ServiceType
+	var result []model.Project
 	if err := cursor.All(ctx, &result); err != nil {
 		return nil, err
 	}
 	return result, nil
 }
 
-func (r *MongoRepository) Get(ctx context.Context, id string) (model.ServiceType, error) {
-	var item model.ServiceType
+func (r *MongoRepository) Get(ctx context.Context, id string) (model.Project, error) {
+	var item model.Project
 	if err := r.items.FindOne(ctx, bson.M{"_id": id}).Decode(&item); err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
-			return model.ServiceType{}, ErrNotFound
+			return model.Project{}, ErrNotFound
 		}
-		return model.ServiceType{}, err
+		return model.Project{}, err
 	}
 	return item, nil
 }
 
-func (r *MongoRepository) Create(ctx context.Context, item model.ServiceType) error {
+func (r *MongoRepository) Create(ctx context.Context, item model.Project) error {
 	_, err := r.items.InsertOne(ctx, item)
 	if mongo.IsDuplicateKeyError(err) {
 		return ErrAlreadyExists
@@ -147,7 +147,7 @@ func (r *MongoRepository) Create(ctx context.Context, item model.ServiceType) er
 	return err
 }
 
-func (r *MongoRepository) Update(ctx context.Context, item model.ServiceType) error {
+func (r *MongoRepository) Update(ctx context.Context, item model.Project) error {
 	result, err := r.items.ReplaceOne(ctx, bson.M{"_id": item.ID}, item)
 	if err != nil {
 		if mongo.IsDuplicateKeyError(err) {
@@ -174,7 +174,7 @@ func (r *MongoRepository) Delete(ctx context.Context, id string) error {
 
 func (r *MongoRepository) Close(ctx context.Context) error { return r.client.Disconnect(ctx) }
 
-func NewServiceType(projectID, hostID, name string) model.ServiceType {
+func NewProject(name, note, envVars string) model.Project {
 	now := time.Now().UTC()
-	return model.ServiceType{ID: uuid.NewString(), ProjectID: projectID, HostID: hostID, Name: name, CreatedAt: now, UpdatedAt: now}
+	return model.Project{ID: uuid.NewString(), Name: name, Note: note, EnvVars: envVars, CreatedAt: now, UpdatedAt: now}
 }

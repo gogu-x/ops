@@ -11,9 +11,11 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gogu-x/ops/conf"
 	"github.com/gogu-x/ops/ops/host"
+	"github.com/gogu-x/ops/ops/instance"
 	"github.com/gogu-x/ops/ops/internal/auth"
 	"github.com/gogu-x/ops/ops/internal/model"
 	"github.com/gogu-x/ops/ops/internal/store"
+	"github.com/gogu-x/ops/ops/project"
 	"github.com/gogu-x/ops/ops/service"
 	"github.com/gogu-x/tree"
 )
@@ -91,6 +93,23 @@ func (a *Actor) registerRoutes(r *gin.Engine) {
 	protected.POST("/service-types", requireRole("admin"), a.createServiceType)
 	protected.PUT("/service-types/:id", requireRole("admin"), a.updateServiceType)
 	protected.DELETE("/service-types/:id", requireRole("admin"), a.deleteServiceType)
+	protected.GET("/projects", a.listProjects)
+	protected.POST("/projects", requireRole("admin"), a.createProject)
+	protected.PUT("/projects/:id", requireRole("admin"), a.updateProject)
+	protected.DELETE("/projects/:id", requireRole("admin"), a.deleteProject)
+	protected.GET("/service-instances", a.listServiceInstances)
+	protected.POST("/service-instances", requireRole("admin"), a.createServiceInstance)
+	protected.PUT("/service-instances/:id", requireRole("admin"), a.updateServiceInstance)
+	protected.DELETE("/service-instances/:id", requireRole("admin"), a.deleteServiceInstance)
+	protected.GET("/service-instances/:id/status", a.serviceInstanceStatus)
+	protected.GET("/service-instances/:id/detail", a.serviceInstanceDetail)
+	protected.GET("/service-instances/:id/logs", a.serviceInstanceLogs)
+	protected.POST("/service-instances/:id/deploy", requireRole("admin"), a.deployServiceInstance)
+	protected.POST("/service-instances/:id/update-image", requireRole("admin"), a.updateServiceInstanceImage)
+	protected.POST("/service-instances/:id/start", requireRole("admin"), a.startServiceInstance)
+	protected.POST("/service-instances/:id/stop", requireRole("admin"), a.stopServiceInstance)
+	protected.POST("/service-instances/:id/restart", requireRole("admin"), a.restartServiceInstance)
+	protected.DELETE("/service-instances/:id/container", requireRole("admin"), a.removeServiceInstanceContainer)
 	protected.GET("/admin/ping", requireRole("admin"), func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) })
 }
 
@@ -285,6 +304,10 @@ func (a *Actor) createServiceType(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "invalid service type request"})
 		return
 	}
+	if err := a.ensureProject(item.ProjectID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
 	if err := a.ensureHost(item.HostID); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
 		return
@@ -313,6 +336,10 @@ func (a *Actor) updateServiceType(c *gin.Context) {
 		return
 	}
 	item.ID = c.Param("id")
+	if err := a.ensureProject(item.ProjectID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
 	if err := a.ensureHost(item.HostID); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
 		return
@@ -367,4 +394,360 @@ func (a *Actor) ensureHost(id string) error {
 		}
 	}
 	return errors.New("host not found: " + id)
+}
+
+func projectRequest(message interface{}) (interface{}, error) {
+	pid, ok := tree.Lookup("ops-project")
+	if !ok {
+		return nil, errors.New("project actor is unavailable")
+	}
+	return tree.Request(pid, message).AwaitTimeout(20 * time.Second)
+}
+
+func (a *Actor) ensureProject(id string) error {
+	if strings.TrimSpace(id) == "" {
+		return errors.New("project_id is required")
+	}
+	value, err := projectRequest(project.ListRequest{})
+	if err != nil {
+		return err
+	}
+	result, ok := value.(project.ListResponse)
+	if !ok {
+		return errors.New("invalid project actor response")
+	}
+	for _, item := range result.Projects {
+		if item.ID == id {
+			return nil
+		}
+	}
+	return errors.New("project not found: " + id)
+}
+
+func (a *Actor) listProjects(c *gin.Context) {
+	value, err := projectRequest(project.ListRequest{})
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
+	result, ok := value.(project.ListResponse)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "invalid project actor response"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "data": result.Projects})
+}
+
+func (a *Actor) createProject(c *gin.Context) {
+	var item model.Project
+	if err := c.ShouldBindJSON(&item); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "invalid project request"})
+		return
+	}
+	value, err := projectRequest(project.CreateRequest{Project: item})
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, project.ErrAlreadyExists) {
+			status = http.StatusConflict
+		}
+		c.JSON(status, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
+	created, ok := value.(model.Project)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "invalid project actor response"})
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"ok": true, "data": created})
+}
+
+func (a *Actor) updateProject(c *gin.Context) {
+	var item model.Project
+	if err := c.ShouldBindJSON(&item); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "invalid project request"})
+		return
+	}
+	item.ID = c.Param("id")
+	value, err := projectRequest(project.UpdateRequest{Project: item})
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, project.ErrNotFound) {
+			status = http.StatusNotFound
+		} else if errors.Is(err, project.ErrAlreadyExists) {
+			status = http.StatusConflict
+		}
+		c.JSON(status, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
+	updated, ok := value.(model.Project)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "invalid project actor response"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "data": updated})
+}
+
+func (a *Actor) deleteProject(c *gin.Context) {
+	_, err := projectRequest(project.DeleteRequest{ID: c.Param("id")})
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, project.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func serviceInstanceRequest(message interface{}) (interface{}, error) {
+	pid, ok := tree.Lookup("ops-instance")
+	if !ok {
+		return nil, errors.New("service instance actor is unavailable")
+	}
+	return tree.Request(pid, message).AwaitTimeout(20 * time.Second)
+}
+
+func (a *Actor) ensureServiceType(id string) error {
+	if strings.TrimSpace(id) == "" {
+		return errors.New("service_type_id is required")
+	}
+	value, err := serviceRequest(service.ListRequest{})
+	if err != nil {
+		return err
+	}
+	result, ok := value.(service.ListResponse)
+	if !ok {
+		return errors.New("invalid service actor response")
+	}
+	for _, item := range result.ServiceTypes {
+		if item.ID == id {
+			return nil
+		}
+	}
+	return errors.New("service type not found: " + id)
+}
+
+func (a *Actor) listServiceInstances(c *gin.Context) {
+	value, err := serviceInstanceRequest(instance.ListRequest{})
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
+	result, ok := value.(instance.ListResponse)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "invalid service instance actor response"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "data": result.ServiceInstances})
+}
+
+func (a *Actor) createServiceInstance(c *gin.Context) {
+	var item model.ServiceInstance
+	if err := c.ShouldBindJSON(&item); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "invalid service instance request"})
+		return
+	}
+	if err := a.ensureServiceType(item.ServiceTypeID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
+	value, err := serviceInstanceRequest(instance.CreateRequest{ServiceInstance: item})
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, instance.ErrAlreadyExists) {
+			status = http.StatusConflict
+		}
+		c.JSON(status, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
+	created, ok := value.(model.ServiceInstance)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "invalid service instance actor response"})
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"ok": true, "data": created})
+}
+
+func (a *Actor) updateServiceInstance(c *gin.Context) {
+	var item model.ServiceInstance
+	if err := c.ShouldBindJSON(&item); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "invalid service instance request"})
+		return
+	}
+	item.ID = c.Param("id")
+	if err := a.ensureServiceType(item.ServiceTypeID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
+	value, err := serviceInstanceRequest(instance.UpdateRequest{ServiceInstance: item})
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, instance.ErrNotFound) {
+			status = http.StatusNotFound
+		} else if errors.Is(err, instance.ErrAlreadyExists) {
+			status = http.StatusConflict
+		}
+		c.JSON(status, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
+	updated, ok := value.(model.ServiceInstance)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "invalid service instance actor response"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "data": updated})
+}
+
+func (a *Actor) deleteServiceInstance(c *gin.Context) {
+	_, err := serviceInstanceRequest(instance.DeleteRequest{ID: c.Param("id")})
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, instance.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (a *Actor) deployServiceInstance(c *gin.Context) {
+	value, err := serviceInstanceRequest(instance.DeployRequest{ID: c.Param("id")})
+	if err != nil {
+		status := http.StatusBadGateway
+		if errors.Is(err, instance.ErrNotFound) {
+			status = http.StatusNotFound
+		} else if errors.Is(err, instance.ErrHostUnresolved) {
+			status = http.StatusBadRequest
+		}
+		c.JSON(status, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
+	result, ok := value.(model.ServiceInstance)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "invalid service instance actor response"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "data": result})
+}
+
+func (a *Actor) updateServiceInstanceImage(c *gin.Context) {
+	var req struct {
+		Image string `json:"image" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "invalid request: image is required"})
+		return
+	}
+	value, err := serviceInstanceRequest(instance.UpdateImageRequest{ID: c.Param("id"), Image: req.Image})
+	if err != nil {
+		status := http.StatusBadGateway
+		if errors.Is(err, instance.ErrNotFound) {
+			status = http.StatusNotFound
+		} else if errors.Is(err, instance.ErrHostUnresolved) {
+			status = http.StatusBadRequest
+		}
+		c.JSON(status, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
+	result, ok := value.(model.ServiceInstance)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "invalid service instance actor response"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "data": result})
+}
+
+func (a *Actor) startServiceInstance(c *gin.Context) {
+	a.instanceContainerAction(c, "start")
+}
+
+func (a *Actor) stopServiceInstance(c *gin.Context) {
+	a.instanceContainerAction(c, "stop")
+}
+
+func (a *Actor) restartServiceInstance(c *gin.Context) {
+	a.instanceContainerAction(c, "restart")
+}
+
+func (a *Actor) instanceContainerAction(c *gin.Context, action string) {
+	_, err := serviceInstanceRequest(instance.ContainerActionRequest{ID: c.Param("id"), Action: action})
+	if err != nil {
+		status := http.StatusBadGateway
+		if errors.Is(err, instance.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (a *Actor) removeServiceInstanceContainer(c *gin.Context) {
+	_, err := serviceInstanceRequest(instance.RemoveContainerRequest{ID: c.Param("id")})
+	if err != nil {
+		status := http.StatusBadGateway
+		if errors.Is(err, instance.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (a *Actor) serviceInstanceStatus(c *gin.Context) {
+	value, err := serviceInstanceRequest(instance.StatusRequest{ID: c.Param("id")})
+	if err != nil {
+		status := http.StatusBadGateway
+		if errors.Is(err, instance.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
+	result, ok := value.(model.ServiceInstance)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "invalid service instance actor response"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "data": result})
+}
+
+func (a *Actor) serviceInstanceDetail(c *gin.Context) {
+	value, err := serviceInstanceRequest(instance.DetailRequest{ID: c.Param("id")})
+	if err != nil {
+		status := http.StatusBadGateway
+		if errors.Is(err, instance.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
+	result, ok := value.(instance.DetailResponse)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "invalid service instance actor response"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "data": result.Detail})
+}
+
+func (a *Actor) serviceInstanceLogs(c *gin.Context) {
+	tail := c.DefaultQuery("tail", "200")
+	value, err := serviceInstanceRequest(instance.LogsRequest{ID: c.Param("id"), Tail: tail})
+	if err != nil {
+		status := http.StatusBadGateway
+		if errors.Is(err, instance.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
+	result, ok := value.(instance.LogsResponse)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "invalid service instance actor response"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "data": result.Logs})
 }

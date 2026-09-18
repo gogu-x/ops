@@ -7,11 +7,9 @@ export interface ServiceParam {
 
 export interface ServiceType {
   id: string
+  project_id: string
   host_id: string
   name: string
-  image: string
-  params: ServiceParam[]
-  note: string
   created_at?: string
   updated_at?: string
 }
