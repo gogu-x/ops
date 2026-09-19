@@ -1,0 +1,9 @@
+**/.git
+**/.gocache
+**/node_modules
+**/dist
+**/*.log
+**/*.pid
+ops/frontend
+ops/__pycache__
+gogs

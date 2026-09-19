@@ -1,0 +1,63 @@
+name: ops
+
+services:
+  mongo:
+    image: mongo:8.0
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:-ops}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?set MONGO_ROOT_PASSWORD in .env}
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - mongosh --quiet --host 127.0.0.1 --username "$${MONGO_INITDB_ROOT_USERNAME}" --password "$${MONGO_INITDB_ROOT_PASSWORD}" --authenticationDatabase admin --eval "db.adminCommand('ping').ok" | grep 1
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  ops-backend:
+    build:
+      context: ..
+      dockerfile: ops/server/Dockerfile
+    image: ${OPS_BACKEND_IMAGE:-ops-backend:local}
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      OPS_ADDR: :8090
+      OPS_MONGO_URI: mongodb://mongo:27017/?authSource=admin
+      OPS_MONGO_DATABASE: ${OPS_MONGO_DATABASE:-ops_platform}
+      OPS_MONGO_USERNAME: ${MONGO_ROOT_USERNAME:-ops}
+      OPS_MONGO_PASSWORD: ${MONGO_ROOT_PASSWORD:?set MONGO_ROOT_PASSWORD in .env}
+      OPS_JWT_SECRET: ${OPS_JWT_SECRET:?set OPS_JWT_SECRET in .env}
+      OPS_ADMIN_PASSWORD: ${OPS_ADMIN_PASSWORD:?set OPS_ADMIN_PASSWORD in .env}
+      OPS_ACCESS_TTL_MIN: ${OPS_ACCESS_TTL_MIN:-15}
+      OPS_REFRESH_TTL_DAYS: ${OPS_REFRESH_TTL_DAYS:-7}
+    depends_on:
+      mongo:
+        condition: service_healthy
+    expose:
+      - "8090"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8090/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  ops-web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: ${OPS_WEB_IMAGE:-ops-web:local}
+    restart: unless-stopped
+    depends_on:
+      ops-backend:
+        condition: service_healthy
+    ports:
+      - "${OPS_HTTP_PORT:-8090}:80"
+
+volumes:
+  mongo-data:
