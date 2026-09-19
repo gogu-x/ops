@@ -623,9 +623,7 @@ onUnmounted(stopStatusPolling)
       <!-- 顶部面包屑 + 筛选 -->
       <div class="top-bar">
         <div class="breadcrumb">
-          <span class="breadcrumb-title">服务管理</span>
           <template v-if="activeProject">
-            <span class="breadcrumb-sep">/</span>
             <span>{{ activeProject.name }}</span>
           </template>
           <template v-if="activeEnvironment">
@@ -1025,12 +1023,6 @@ onUnmounted(stopStatusPolling)
   min-width: 0;
   font-size: 15px;
   color: var(--ops-text-secondary);
-}
-
-.breadcrumb-title {
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--ops-text);
 }
 
 .breadcrumb-sep { color: #c5ccd5; }
