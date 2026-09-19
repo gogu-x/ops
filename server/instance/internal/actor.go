@@ -9,7 +9,8 @@ import (
 )
 
 type InstanceService struct {
-	repo Repository
+	repo   Repository
+	events EventRepository
 }
 
 func NewInstanceService(repositories ...Repository) *InstanceService {
@@ -17,7 +18,28 @@ func NewInstanceService(repositories ...Repository) *InstanceService {
 	if len(repositories) > 0 && repositories[0] != nil {
 		repo = repositories[0]
 	}
-	return &InstanceService{repo: repo}
+	return &InstanceService{repo: repo, events: NewMemoryEventRepository()}
+}
+
+// NewInstanceServiceWithEvents constructs the actor with an explicit event
+// repository (e.g. Mongo-backed), falling back to an in-memory event
+// repository when events is nil.
+func NewInstanceServiceWithEvents(repo Repository, events EventRepository) *InstanceService {
+	a := NewInstanceService(repo)
+	if events != nil {
+		a.events = events
+	}
+	return a
+}
+
+// recordEvent best-effort records a lifecycle event for an instance. It
+// never returns an error: event recording is diagnostic and must not affect
+// the outcome of the operation it's attached to.
+func (is *InstanceService) recordEvent(instanceID, eventType, message string) {
+	if is.events == nil {
+		return
+	}
+	_ = is.events.Create(bgCtx(), NewEvent(instanceID, eventType, message))
 }
 
 func (is *InstanceService) Name() string { return "ops-instance" }
@@ -49,6 +71,9 @@ func (is *InstanceService) HandleMessage(ctx tree.Context, message interface{}) 
 	case model.LogsRequest:
 		logs, err := is.logs(request.ID, request.Tail)
 		ctx.Response(model.LogsResponse{Logs: logs}, err)
+	case model.ListEventsRequest:
+		events, err := is.listEvents(request.ID, request.Limit)
+		ctx.Response(model.EventsResponse{Events: events}, err)
 	default:
 		ctx.Response(nil, fmt.Errorf("unsupported service instance message %T", message))
 	}

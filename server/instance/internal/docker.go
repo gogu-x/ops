@@ -155,6 +155,9 @@ func applyContainerSummary(item *model.ServiceInstance, c types.Container) {
 	item.Status = mapContainerStatus(c.State)
 	item.StatusText = c.Status
 	item.ContainerImage = c.Image
+	if c.Created > 0 {
+		item.StartedAt = time.Unix(c.Created, 0).UTC().Format(time.RFC3339)
+	}
 }
 
 // findContainerForInstance searches ops-managed containers on a host for
@@ -169,6 +172,14 @@ func findContainerForInstance(containers []types.Container, instanceID string) (
 }
 
 func (a *InstanceService) deploy(id string) (model.ServiceInstance, error) {
+	return a.deployWithEvent(id, true)
+}
+
+// deployWithEvent implements deploy, optionally suppressing the
+// deploy_succeeded/deploy_failed event (the "restart" container action
+// calls this internally via redeploy and records its own
+// container_restarted/container_restart_failed event instead).
+func (a *InstanceService) deployWithEvent(id string, recordDeployEvent bool) (model.ServiceInstance, error) {
 	item, err := a.repo.Get(bgCtx(), id)
 	if err != nil {
 		return model.ServiceInstance{}, err
@@ -176,7 +187,16 @@ func (a *InstanceService) deploy(id string) (model.ServiceInstance, error) {
 	if strings.TrimSpace(item.HostID) == "" {
 		return model.ServiceInstance{}, ErrHostUnresolved
 	}
-	return a.redeploy(item, item.HostID)
+	result, err := a.redeploy(item, item.HostID)
+	if !recordDeployEvent {
+		return result, err
+	}
+	if err != nil {
+		a.recordEvent(id, model.EventDeployFailed, err.Error())
+	} else {
+		a.recordEvent(id, model.EventDeploySucceeded, fmt.Sprintf("镜像 %s 部署成功", result.Image))
+	}
+	return result, err
 }
 
 // updateImage changes a service instance's image tag, persists it, pulls
@@ -205,9 +225,16 @@ func (a *InstanceService) updateImage(id, newImage string) (model.ServiceInstanc
 	if _, err := hostRequest(model.ImagePullRequest{HostID: hostID, Image: newImage}); err != nil {
 		item.Status = model.StatusError
 		item.DeployError = fmt.Sprintf("pull image: %s", err.Error())
+		a.recordEvent(id, model.EventUpdateImageFailed, fmt.Sprintf("拉取镜像 %s 失败: %s", newImage, err.Error()))
 		return item, fmt.Errorf("pull image %s: %w", newImage, err)
 	}
-	return a.redeploy(item, hostID)
+	result, err := a.redeploy(item, hostID)
+	if err != nil {
+		a.recordEvent(id, model.EventUpdateImageFailed, err.Error())
+	} else {
+		a.recordEvent(id, model.EventUpdateImageSucceeded, fmt.Sprintf("镜像已更新为 %s 并重新部署", newImage))
+	}
+	return result, err
 }
 
 // redeploy removes any existing container for the instance (matched by the
@@ -249,7 +276,12 @@ func (a *InstanceService) redeploy(item model.ServiceInstance, hostID string) (m
 // params, env text, port mappings) made since the last deploy.
 func (a *InstanceService) containerAction(id, action string) error {
 	if action == "restart" {
-		_, err := a.deploy(id)
+		_, err := a.deployWithEvent(id, false)
+		if err != nil {
+			a.recordEvent(id, model.EventContainerRestartFailed, err.Error())
+		} else {
+			a.recordEvent(id, model.EventContainerRestarted, "容器已重启")
+		}
 		return err
 	}
 	item, err := a.repo.Get(bgCtx(), id)
@@ -264,7 +296,27 @@ func (a *InstanceService) containerAction(id, action string) error {
 		return err
 	}
 	_, err = hostRequest(model.ContainerActionRequest{HostID: item.HostID, ContainerID: containerID, Action: action})
+	a.recordContainerActionEvent(id, action, err)
 	return err
+}
+
+// recordContainerActionEvent records a lifecycle event for a start/stop
+// action (restart is recorded by deploy, since it redeploys).
+func (a *InstanceService) recordContainerActionEvent(id, action string, err error) {
+	var okType, failType, okMsg string
+	switch action {
+	case "start":
+		okType, failType, okMsg = model.EventContainerStarted, model.EventContainerStartFailed, "容器启动成功"
+	case "stop":
+		okType, failType, okMsg = model.EventContainerStopped, model.EventContainerStopFailed, "容器已停止"
+	default:
+		return
+	}
+	if err != nil {
+		a.recordEvent(id, failType, err.Error())
+		return
+	}
+	a.recordEvent(id, okType, okMsg)
 }
 
 func (a *InstanceService) removeContainer(id string) error {
@@ -280,6 +332,11 @@ func (a *InstanceService) removeContainer(id string) error {
 		return err
 	}
 	_, err = hostRequest(model.ContainerActionRequest{HostID: item.HostID, ContainerID: containerID, Action: "remove"})
+	if err != nil {
+		a.recordEvent(id, model.EventContainerRemoveFailed, err.Error())
+	} else {
+		a.recordEvent(id, model.EventContainerRemoved, "容器已移除")
+	}
 	return err
 }
 
@@ -428,6 +485,22 @@ func (a *InstanceService) logs(id, tail string) (string, error) {
 		return "", errors.New("invalid host actor response")
 	}
 	return result.Logs, nil
+}
+
+// listEvents returns recent lifecycle events for a service instance,
+// most-recent first.
+func (a *InstanceService) listEvents(id string, limit int) ([]model.InstanceEvent, error) {
+	if a.events == nil {
+		return []model.InstanceEvent{}, nil
+	}
+	events, err := a.events.ListByInstance(bgCtx(), id, limit)
+	if err != nil {
+		return nil, err
+	}
+	if events == nil {
+		events = []model.InstanceEvent{}
+	}
+	return events, nil
 }
 
 // lookupContainerID finds the current container ID for an instance by

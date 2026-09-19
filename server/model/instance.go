@@ -1,6 +1,10 @@
 package model
 
-import "github.com/docker/docker/api/types"
+import (
+	"time"
+
+	"github.com/docker/docker/api/types"
+)
 
 type ListRequest struct{}
 type CreateRequest struct{ Host Host }
@@ -116,3 +120,40 @@ type LogsRequest struct {
 	Tail string
 }
 type LogsResponse struct{ Logs string }
+
+// InstanceEvent records a notable occurrence in a service instance's
+// lifecycle (deploy, start/stop/restart, image update, health check),
+// shown as a timeline in the ops UI's instance detail panel.
+type InstanceEvent struct {
+	ID         string    `json:"id" bson:"_id"`
+	InstanceID string    `json:"instance_id" bson:"instance_id"`
+	Type       string    `json:"type" bson:"type"`
+	Message    string    `json:"message" bson:"message"`
+	CreatedAt  time.Time `json:"created_at" bson:"created_at"`
+}
+
+// InstanceEvent type constants.
+const (
+	EventDeploySucceeded        = "deploy_succeeded"
+	EventDeployFailed           = "deploy_failed"
+	EventUpdateImageSucceeded   = "update_image_succeeded"
+	EventUpdateImageFailed      = "update_image_failed"
+	EventContainerStarted       = "container_started"
+	EventContainerStartFailed   = "container_start_failed"
+	EventContainerStopped       = "container_stopped"
+	EventContainerStopFailed    = "container_stop_failed"
+	EventContainerRestarted     = "container_restarted"
+	EventContainerRestartFailed = "container_restart_failed"
+	EventContainerRemoved       = "container_removed"
+	EventContainerRemoveFailed  = "container_remove_failed"
+	EventHealthCheckPassed      = "health_check_passed"
+	EventHealthCheckFailed      = "health_check_failed"
+)
+
+// ListEventsRequest asks the ops-instance actor for an instance's recent
+// events. Limit <= 0 means no limit.
+type ListEventsRequest struct {
+	ID    string
+	Limit int
+}
+type EventsResponse struct{ Events []InstanceEvent }

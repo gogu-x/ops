@@ -3,6 +3,7 @@ package internal
 import (
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gogu-x/ops/model"
@@ -16,6 +17,7 @@ func (a *AdminService) registerInstanceRoutes(r *gin.RouterGroup) {
 	r.GET("/service-instances/:id/status", a.serviceInstanceStatus)
 	r.GET("/service-instances/:id/detail", a.serviceInstanceDetail)
 	r.GET("/service-instances/:id/logs", a.serviceInstanceLogs)
+	r.GET("/service-instances/:id/events", a.serviceInstanceEvents)
 	r.POST("/service-instances/:id/deploy", requireRole("admin"), a.deployServiceInstance)
 	r.POST("/service-instances/:id/update-image", requireRole("admin"), a.updateServiceInstanceImage)
 	r.POST("/service-instances/:id/start", requireRole("admin"), a.startServiceInstance)
@@ -164,6 +166,16 @@ func (a *AdminService) serviceInstanceDetail(c *gin.Context) {
 
 func (a *AdminService) serviceInstanceLogs(c *gin.Context) {
 	result, err := a.app.InstanceLogs(c.Param("id"), c.DefaultQuery("tail", "200"))
+	if err != nil {
+		writeInstanceGatewayError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "data": result})
+}
+
+func (a *AdminService) serviceInstanceEvents(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	result, err := a.app.InstanceEvents(c.Param("id"), limit)
 	if err != nil {
 		writeInstanceGatewayError(c, err)
 		return

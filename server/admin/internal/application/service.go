@@ -368,6 +368,18 @@ func (s *Service) InstanceLogs(id, tail string) (string, error) {
 	return result.Logs, nil
 }
 
+func (s *Service) InstanceEvents(id string, limit int) ([]model.InstanceEvent, error) {
+	value, err := s.gateway.Request("ops-instance", model.ListEventsRequest{ID: id, Limit: limit})
+	if err != nil {
+		return nil, err
+	}
+	result, ok := value.(model.EventsResponse)
+	if !ok {
+		return nil, errors.New("invalid service instance actor response")
+	}
+	return result.Events, nil
+}
+
 func containsProject(items []model.Project, id string) bool {
 	for _, item := range items {
 		if item.ID == id {

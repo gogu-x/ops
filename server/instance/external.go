@@ -22,13 +22,17 @@ func NewMemoryRepository() Repository {
 }
 
 // NewInstanceService constructs the service-instance actor. When
-// mongodbData is non-nil, it persists instances to MongoDB; otherwise it
-// falls back to an in-memory repository. The Docker host backing a service
-// instance is resolved at request time via the ops-admin actor (see
-// instance/internal/docker.go's resolveHostID), not injected here.
+// mongodbData is non-nil, it persists instances (and their lifecycle
+// events) to MongoDB; otherwise it falls back to in-memory repositories.
+// The Docker host backing a service instance is resolved at request time
+// via the ops-admin actor (see instance/internal/docker.go's
+// resolveHostID), not injected here.
 func NewInstanceService(mongodbData *mongo.Database) *internal.InstanceService {
 	if mongodbData == nil {
 		return internal.NewInstanceService()
 	}
-	return internal.NewInstanceService(internal.NewMongoRepository(mongodbData))
+	return internal.NewInstanceServiceWithEvents(
+		internal.NewMongoRepository(mongodbData),
+		internal.NewMongoEventRepository(mongodbData),
+	)
 }
