@@ -5,6 +5,8 @@
 
 # Local runtime
 .ops_password
+.env
+!.env.example
 server.pid
 *.log
 

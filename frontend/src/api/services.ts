@@ -8,7 +8,7 @@ export interface ServiceParam {
 export interface ServiceType {
   id: string
   project_id: string
-  host_id: string
+  environment_id: string
   name: string
   created_at?: string
   updated_at?: string

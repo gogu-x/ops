@@ -6,6 +6,7 @@ export type InstanceStatus = 'not_deployed' | 'running' | 'stopped' | 'restartin
 export interface ServiceInstance {
   id: string
   service_type_id: string
+  host_id: string
   name: string
   image: string
   params: ServiceParam[]

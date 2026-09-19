@@ -3,49 +3,87 @@ package conf
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"os"
-	"strconv"
+	"strings"
+
+	"github.com/urfave/cli/v3"
 )
 
-type Config struct {
-	Addr           string
-	MongoURI       string
-	MongoDatabase  string
-	MongoUsername  string
-	MongoPassword  string
-	JWTSecret      string
-	AccessTTLMin   int
-	RefreshTTLDays int
-	AdminPassword  string
-}
+var (
+	// host（容器内需设为容器名或IP）
+	Addr = "5001"
 
-func LoadConfig() Config {
-	return Config{
-		Addr:           envString("OPS_ADDR", ":8090"),
-		MongoURI:       os.Getenv("OPS_MONGO_URI"),
-		MongoDatabase:  envString("OPS_MONGO_DATABASE", "ops_platform"),
-		MongoUsername:  os.Getenv("OPS_MONGO_USERNAME"),
-		MongoPassword:  os.Getenv("OPS_MONGO_PASSWORD"),
-		JWTSecret:      envString("OPS_JWT_SECRET", RandomSecret()),
-		AccessTTLMin:   envInt("OPS_ACCESS_TTL_MIN", 15),
-		RefreshTTLDays: envInt("OPS_REFRESH_TTL_DAYS", 7),
-		AdminPassword:  os.Getenv("OPS_ADMIN_PASSWORD"),
+	// MongoURL MongoDB 连接地址
+	MongoURL = "mongodb://43.160.212.55:27017"
+
+	// MongoUsername MongoDB 认证用户名
+	MongoUsername = ""
+
+	// MongoPassword MongoDB 认证密码
+	MongoPassword = ""
+
+	// NatsURL NATS 连接地址
+	NatsURL = "nats://43.160.212.55:4222"
+
+	// JWTSecret JWT 签名密钥
+	JWTSecret = "jwt-secret"
+
+	AdminPassword = "admin-password"
+
+	AccessTTLMin = 15
+
+	RefreshTTLDays = 7
+)
+
+// ConnectionFlags returns flags shared by all service entrypoints. Values passed
+// explicitly on the command line override values from --config.
+func ConnectionFlags() []cli.Flag {
+	return []cli.Flag{
+		&cli.StringFlag{Name: "addr", Usage: "addr"},
+		&cli.StringFlag{Name: "etcd", Usage: "etcd, comma-separated"},
+		&cli.StringFlag{Name: "grpc-host", Usage: "game gRPC host"},
+		&cli.StringFlag{Name: "mongo-url", Usage: "MongoDB connection URI"},
+		&cli.StringFlag{Name: "mongo-username", Usage: "MongoDB authentication username"},
+		&cli.StringFlag{Name: "mongo-password", Usage: "MongoDB authentication password"},
+		&cli.StringFlag{Name: "nats-url", Usage: "NATS connection URI"},
+		&cli.StringFlag{Name: "jwt-secret", Usage: "JWT signing secret"},
+		&cli.StringFlag{Name: "admin-password", Usage: "admin-password"},
 	}
 }
 
-func envString(key, fallback string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
+// LoadAndApply loads --config first, then applies only explicitly supplied
+// command-line connection settings, giving the command line precedence.
+func LoadAndApply(c *cli.Command) error {
+
+	if c.IsSet("addr") {
+		Addr = c.String("addr")
 	}
-	return fallback
+	if c.IsSet("mongo-url") {
+		MongoURL = c.String("mongo-url")
+	}
+	if c.IsSet("mongo-username") {
+		MongoUsername = c.String("mongo-username")
+	}
+	if c.IsSet("mongo-password") {
+		MongoPassword = c.String("mongo-password")
+	}
+	if c.IsSet("nats-url") {
+		NatsURL = c.String("nats-url")
+	}
+	if c.IsSet("jwt-secret") {
+		JWTSecret = c.String("jwt-secret")
+	}
+	if c.IsSet("admin-password") {
+		AdminPassword = c.String("admin-password")
+	}
+	return nil
 }
 
-func envInt(key string, fallback int) int {
-	value, err := strconv.Atoi(os.Getenv(key))
-	if err != nil || value <= 0 {
-		return fallback
+func splitEndpoints(value string) []string {
+	endpoints := strings.Split(value, ",")
+	for i := range endpoints {
+		endpoints[i] = strings.TrimSpace(endpoints[i])
 	}
-	return value
+	return endpoints
 }
 
 func RandomSecret() string {
