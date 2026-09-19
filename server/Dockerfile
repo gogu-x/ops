@@ -1,9 +1,11 @@
-# Build context must be the gotree parent directory (see compose.yaml).
+# Build context is this server/ directory. The tree module is pulled from the
+# Go module proxy (github.com/gogu-x/tree), so no local copy is needed.
 FROM golang:1.26-alpine AS builder
 WORKDIR /src
-COPY tree/ ./tree/
-COPY ops/server/ ./ops/server/
-WORKDIR /src/ops/server
+# Download dependencies first so this layer is cached until go.mod/go.sum change.
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/ops .
 
 FROM alpine:3.22

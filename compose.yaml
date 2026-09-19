@@ -20,8 +20,8 @@ services:
 
   ops-backend:
     build:
-      context: ..
-      dockerfile: ops/server/Dockerfile
+      context: ./server
+      dockerfile: Dockerfile
     image: ${OPS_BACKEND_IMAGE:-ops-backend:local}
     restart: unless-stopped
     environment:
