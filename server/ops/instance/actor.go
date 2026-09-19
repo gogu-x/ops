@@ -6,56 +6,43 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/gogu-x/ops/conf"
 	"github.com/gogu-x/ops/ops/internal/model"
+	"github.com/gogu-x/ops/ops/internal/service"
 	"github.com/gogu-x/tree"
 )
 
-type ListRequest struct{}
-type CreateRequest struct{ ServiceInstance model.ServiceInstance }
-type UpdateRequest struct{ ServiceInstance model.ServiceInstance }
-type DeleteRequest struct{ ID string }
 type ListResponse struct{ ServiceInstances []model.ServiceInstance }
+type EnrichRequest struct{ ServiceInstances []model.ServiceInstance }
 
 type Actor struct {
-	cfg  conf.Config
-	repo Repository
+	repo         Repository
+	serviceTypes service.Repository
 }
 
-func NewActor(cfg conf.Config) *Actor {
-	return &Actor{cfg: cfg, repo: NewMemoryRepository()}
+func NewActor(_ conf.Config, repositories ...Repository) *Actor {
+	repo := Repository(NewMemoryRepository())
+	if len(repositories) > 0 && repositories[0] != nil {
+		repo = repositories[0]
+	}
+	return &Actor{repo: repo}
+}
+
+func NewActorWithRepositories(cfg conf.Config, repo Repository, serviceTypes service.Repository) *Actor {
+	a := NewActor(cfg, repo)
+	a.serviceTypes = serviceTypes
+	return a
 }
 
 func (a *Actor) Name() string { return "ops-instance" }
 
-func (a *Actor) OnInit(_ tree.Context) {
-	if a.cfg.MongoURI != "" {
-		repo, err := NewMongoRepository(context.Background(), a.cfg)
-		if err != nil {
-			panic("connect service instance repository: " + err.Error())
-		}
-		a.repo = repo
-	}
-}
+func (a *Actor) OnInit(_ tree.Context) {}
 
 func (a *Actor) HandleMessage(ctx tree.Context, message interface{}) {
 	switch request := message.(type) {
-	case ListRequest:
-		items, err := a.repo.List(context.Background())
-		if err == nil {
-			items = enrichList(items)
-		}
-		ctx.Response(ListResponse{ServiceInstances: items}, err)
-	case CreateRequest:
-		created, err := a.create(request.ServiceInstance)
-		ctx.Response(created, err)
-	case UpdateRequest:
-		updated, err := a.update(request.ServiceInstance)
-		ctx.Response(updated, err)
-	case DeleteRequest:
-		ctx.Response(nil, a.delete(request.ID))
+	case EnrichRequest:
+		ctx.Response(ListResponse{ServiceInstances: a.enrichList(request.ServiceInstances)}, nil)
 	case DeployRequest:
 		result, err := a.deploy(request.ID)
 		ctx.Response(result, err)
@@ -82,52 +69,13 @@ func (a *Actor) HandleMessage(ctx tree.Context, message interface{}) {
 	}
 }
 
-func (a *Actor) OnStop(_ tree.Context) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_ = a.repo.Close(ctx)
-}
+func (a *Actor) OnStop(_ tree.Context) {}
 
 func bgCtx() context.Context { return context.Background() }
 
-func (a *Actor) delete(id string) error {
-	// Best-effort remove the backing container first; ignore errors caused by
-	// the instance never having been deployed or the host being unavailable,
-	// so metadata deletion is not blocked by container cleanup failures.
-	_ = a.removeContainer(id)
-	return a.repo.Delete(context.Background(), id)
-}
-
-func (a *Actor) create(item model.ServiceInstance) (model.ServiceInstance, error) {
-	if err := validate(item); err != nil {
-		return model.ServiceInstance{}, err
-	}
-	created := NewServiceInstance(item.ServiceTypeID, item.Name, item.Image, item.Note, item.EnvText, item.Network, item.PortMapping, item.Params)
-	if err := a.repo.Create(context.Background(), created); err != nil {
-		return model.ServiceInstance{}, err
-	}
-	return created, nil
-}
-
-func (a *Actor) update(item model.ServiceInstance) (model.ServiceInstance, error) {
-	if err := validate(item); err != nil {
-		return model.ServiceInstance{}, err
-	}
-	existing, err := a.repo.Get(context.Background(), item.ID)
-	if err != nil {
-		return model.ServiceInstance{}, err
-	}
-	item.CreatedAt = existing.CreatedAt
-	item.UpdatedAt = time.Now().UTC()
-	if err := a.repo.Update(context.Background(), item); err != nil {
-		return model.ServiceInstance{}, err
-	}
-	return item, nil
-}
-
 var instanceNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 
-func validate(item model.ServiceInstance) error {
+func Validate(item model.ServiceInstance) error {
 	if strings.TrimSpace(item.ServiceTypeID) == "" {
 		return errors.New("service_type_id is required")
 	}

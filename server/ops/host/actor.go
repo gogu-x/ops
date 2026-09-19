@@ -65,26 +65,21 @@ type ImagePullRequest struct {
 }
 
 type Actor struct {
-	cfg    conf.Config
 	repo   Repository
 	docker *DockerManager
 }
 
-func NewActor(cfg conf.Config) *Actor {
-	return &Actor{cfg: cfg, repo: NewMemoryRepository(), docker: NewDockerManager()}
+func NewActor(_ conf.Config, repositories ...Repository) *Actor {
+	repo := Repository(NewMemoryRepository())
+	if len(repositories) > 0 && repositories[0] != nil {
+		repo = repositories[0]
+	}
+	return &Actor{repo: repo, docker: NewDockerManager()}
 }
 
 func (a *Actor) Name() string { return "ops-host" }
 
-func (a *Actor) OnInit(_ tree.Context) {
-	if a.cfg.MongoURI != "" {
-		repo, err := NewMongoRepository(context.Background(), a.cfg)
-		if err != nil {
-			panic("connect host repository: " + err.Error())
-		}
-		a.repo = repo
-	}
-}
+func (a *Actor) OnInit(_ tree.Context) {}
 
 func (a *Actor) HandleMessage(ctx tree.Context, message interface{}) {
 	switch request := message.(type) {
@@ -128,9 +123,6 @@ func (a *Actor) HandleMessage(ctx tree.Context, message interface{}) {
 
 func (a *Actor) OnStop(_ tree.Context) {
 	_ = a.docker.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_ = a.repo.Close(ctx)
 }
 
 func (a *Actor) create(host model.Host) (model.Host, error) {

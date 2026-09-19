@@ -66,7 +66,7 @@ onMounted(async () => {
       </el-tag>
     </div>
 
-    <el-row :gutter="20">
+    <el-row :gutter="20" class="dashboard-stats">
       <el-col :span="8">
         <el-card class="stat-card is-clickable" shadow="never" @click="router.push('/services')">
           <div class="stat-card-head">
@@ -108,9 +108,9 @@ onMounted(async () => {
       </el-col>
     </el-row>
 
-    <el-card class="ops-card" shadow="never" style="margin-top: 20px">
-      <template #header>快速入口</template>
-      <el-row :gutter="16">
+    <el-card class="ops-card quick-card" shadow="never">
+      <template #header><div class="card-heading"><span>快速入口</span><small>常用运维功能</small></div></template>
+      <el-row :gutter="16" class="quick-grid">
         <el-col :span="12">
           <div class="quick-entry" @click="router.push('/services')">
             <el-icon :size="20" color="#52c41a"><Grid /></el-icon>
@@ -135,20 +135,28 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.page-heading { padding: 22px 24px; border: 1px solid var(--ops-border); border-radius: 12px; background: linear-gradient(135deg, #fff, #f5f9ff); box-shadow: var(--ops-shadow); }
+.dashboard-stats { margin-top: 20px; }
+.quick-card { margin-top: 20px; }
+.card-heading { display: flex; align-items: center; justify-content: space-between; }
+.card-heading small { color: var(--ops-text-secondary); font-size: 11px; font-weight: 400; }
+
 .quick-entry {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 14px 16px;
-  border-radius: 8px;
+  min-height: 82px;
+  padding: 18px;
+  border-radius: 10px;
   border: 1px solid var(--ops-border);
   cursor: pointer;
-  transition: border-color 0.2s, background 0.2s;
+  transition: border-color 0.2s, background 0.2s, transform .2s;
 }
 
 .quick-entry:hover {
   border-color: var(--ops-primary);
   background: var(--ops-primary-light);
+  transform: translateY(-2px);
 }
 
 .quick-entry-title {
@@ -161,5 +169,18 @@ onMounted(async () => {
   font-size: 12px;
   color: var(--ops-text-secondary);
   margin-top: 2px;
+}
+
+@media (max-width: 900px) {
+  .dashboard-stats :deep(.el-col) { flex: 0 0 50%; max-width: 50%; margin-bottom: 16px; }
+}
+
+@media (max-width: 640px) {
+  .page-heading { flex-direction: column; padding: 18px; }
+  .page-heading .el-tag { align-self: flex-start; }
+  .dashboard-stats { margin-top: 14px; }
+  .dashboard-stats :deep(.el-col), .quick-grid :deep(.el-col) { flex: 0 0 100%; max-width: 100%; margin-bottom: 12px; }
+  .quick-card { margin-top: 4px; }
+  .stat-card :deep(.el-card__body) { padding: 16px; }
 }
 </style>

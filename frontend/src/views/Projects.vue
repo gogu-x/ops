@@ -90,7 +90,8 @@ onMounted(loadAll)
 
 <template>
   <AppLayout>
-    <div class="page-heading-actions-only">
+    <div class="page-heading page-heading-modern">
+      <div><h2>项目管理</h2><p>按业务场景组织服务，并维护可复用的部署环境模板。</p></div>
       <el-button v-if="canManage" type="primary" :icon="Plus" @click="openCreate">新建项目</el-button>
     </div>
 
@@ -111,8 +112,8 @@ onMounted(loadAll)
             <div v-if="row.note" class="project-item-note">{{ row.note }}</div>
           </div>
           <div v-if="canManage" class="project-item-actions">
-            <el-button link type="primary" :icon="Edit" @click="openEdit(row)">编辑</el-button>
-            <el-button link type="danger" :icon="Delete" @click="remove(row)">删除</el-button>
+            <el-button plain :icon="Edit" @click="openEdit(row)">编辑</el-button>
+            <el-button plain type="danger" :icon="Delete" @click="remove(row)">删除</el-button>
           </div>
         </div>
         <el-empty v-if="!loading && !projects.length" description="暂无项目，请先新建项目" :image-size="60" />
@@ -155,46 +156,42 @@ onMounted(loadAll)
 </template>
 
 <style scoped>
-.page-heading-actions-only {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: 12px;
-}
-
 .plain-card {
-  border-radius: 6px;
-  border: 1px solid var(--ops-border);
-  box-shadow: none;
+  border: 0;
+  background: transparent;
 }
 
 .plain-card :deep(.el-card__body) {
-  padding: 4px 16px;
+  padding: 0;
 }
 
 .project-list {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 14px;
 }
 
 .project-item {
   display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 4px;
-  border-bottom: 1px solid var(--ops-border);
+  align-items: flex-start;
+  gap: 14px;
+  min-height: 150px;
+  padding: 20px;
+  border: 1px solid var(--ops-border);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: var(--ops-shadow);
+  transition: transform .18s, box-shadow .18s;
 }
-
-.project-item:last-child {
-  border-bottom: 0;
-}
+.project-item:hover { transform: translateY(-2px); box-shadow: 0 10px 28px rgba(31,45,61,.08); }
 
 .project-item-icon {
   flex-shrink: 0;
-  width: 30px;
-  height: 30px;
-  border-radius: 6px;
-  background: var(--ops-bg);
-  color: var(--ops-text-secondary);
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  background: var(--ops-primary-light);
+  color: var(--ops-primary);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -208,26 +205,34 @@ onMounted(loadAll)
 .project-item-title-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .project-item-name {
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 16px;
+  font-weight: 700;
   color: var(--ops-text);
 }
 
 .project-item-note {
-  margin-top: 2px;
-  font-size: 12px;
+  margin-top: 10px;
+  font-size: 13px;
+  line-height: 1.6;
   color: var(--ops-text-secondary);
 }
 
 .project-item-actions {
-  flex-shrink: 0;
+  width: 100%;
+  align-self: flex-end;
   display: flex;
-  gap: 4px;
+  justify-content: flex-end;
+  gap: 8px;
 }
+
+.project-item { flex-wrap: wrap; }
+.project-item-main { min-height: 70px; }
+.project-item-actions .el-button { margin-left: 0; }
 
 .env-vars-hint {
   margin: 6px 0 0;
@@ -241,5 +246,13 @@ onMounted(loadAll)
   font-size: 13px;
   line-height: 1.6;
   background: #f6f8fa;
+}
+
+@media (max-width: 760px) {
+  .page-heading-modern { flex-direction: column; }
+  .page-heading-modern .el-button { width: 100%; }
+  .project-list { grid-template-columns: 1fr; }
+  .project-item { min-height: 0; padding: 16px; }
+  :deep(.el-dialog) { width: calc(100vw - 24px) !important; margin-top: 3vh !important; }
 }
 </style>

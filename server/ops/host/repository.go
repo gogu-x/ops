@@ -3,15 +3,14 @@ package host
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
-	"github.com/gogu-x/ops/conf"
 	"github.com/gogu-x/ops/ops/internal/model"
+	"github.com/gogu-x/ops/ops/mongorpc"
 	"github.com/google/uuid"
 	"go.mongodb.org/mongo-driver/v2/bson"
-	"go.mongodb.org/mongo-driver/v2/mongo"
-	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 var ErrNotFound = errors.New("host not found")
@@ -22,7 +21,6 @@ type Repository interface {
 	Get(ctx context.Context, id string) (model.Host, error)
 	Create(ctx context.Context, host model.Host) error
 	Delete(ctx context.Context, id string) error
-	Close(ctx context.Context) error
 }
 
 type MemoryRepository struct {
@@ -76,73 +74,43 @@ func (r *MemoryRepository) Delete(_ context.Context, id string) error {
 	return nil
 }
 
-func (r *MemoryRepository) Close(context.Context) error { return nil }
+type MongoRepository struct{ actor string }
 
-type MongoRepository struct {
-	client *mongo.Client
-	hosts  *mongo.Collection
-}
+func NewMongoRepository(actor string) *MongoRepository { return &MongoRepository{actor: actor} }
 
-func NewMongoRepository(ctx context.Context, cfg conf.Config) (*MongoRepository, error) {
-	clientOptions := options.Client().ApplyURI(cfg.MongoURI)
-	if cfg.MongoUsername != "" {
-		clientOptions.SetAuth(options.Credential{Username: cfg.MongoUsername, Password: cfg.MongoPassword})
-	}
-	client, err := mongo.Connect(clientOptions)
-	if err != nil {
-		return nil, err
-	}
-	if err := client.Ping(ctx, nil); err != nil {
-		_ = client.Disconnect(context.Background())
-		return nil, err
-	}
-	return &MongoRepository{client: client, hosts: client.Database(cfg.MongoDatabase).Collection("hosts")}, nil
-}
-
-func (r *MongoRepository) List(ctx context.Context) ([]model.Host, error) {
-	cursor, err := r.hosts.Find(ctx, bson.M{})
-	if err != nil {
-		return nil, err
-	}
-	defer cursor.Close(ctx)
+func (r *MongoRepository) List(context.Context) ([]model.Host, error) {
 	var result []model.Host
-	if err := cursor.All(ctx, &result); err != nil {
-		return nil, err
-	}
-	return result, nil
+	_, err := mongorpc.Request(r.actor, &mongorpc.FindMany{Collection: "hosts", Filter: bson.M{}, Results: &result})
+	return result, err
 }
 
-func (r *MongoRepository) Get(ctx context.Context, id string) (model.Host, error) {
+func (r *MongoRepository) Get(_ context.Context, id string) (model.Host, error) {
 	var host model.Host
-	if err := r.hosts.FindOne(ctx, bson.M{"_id": id}).Decode(&host); err != nil {
-		if errors.Is(err, mongo.ErrNoDocuments) {
-			return model.Host{}, ErrNotFound
-		}
-		return model.Host{}, err
+	_, err := mongorpc.Request(r.actor, &mongorpc.FindOne{Collection: "hosts", Filter: bson.M{"_id": id}, Result: &host})
+	if err != nil && strings.Contains(err.Error(), "no documents") {
+		return model.Host{}, ErrNotFound
 	}
-	return host, nil
+	return host, err
 }
 
-func (r *MongoRepository) Create(ctx context.Context, host model.Host) error {
-	_, err := r.hosts.InsertOne(ctx, host)
-	if mongo.IsDuplicateKeyError(err) {
+func (r *MongoRepository) Create(_ context.Context, host model.Host) error {
+	_, err := mongorpc.Request(r.actor, &mongorpc.InsertOne{Collection: "hosts", Doc: host})
+	if err != nil && strings.Contains(err.Error(), "duplicate key") {
 		return ErrAlreadyExists
 	}
 	return err
 }
 
-func (r *MongoRepository) Delete(ctx context.Context, id string) error {
-	result, err := r.hosts.DeleteOne(ctx, bson.M{"_id": id})
+func (r *MongoRepository) Delete(_ context.Context, id string) error {
+	v, err := mongorpc.Request(r.actor, &mongorpc.DeleteOne{Collection: "hosts", Filter: bson.M{"_id": id}})
 	if err != nil {
 		return err
 	}
-	if result.DeletedCount == 0 {
+	if v.(mongorpc.WriteResult).DeletedCount == 0 {
 		return ErrNotFound
 	}
 	return nil
 }
-
-func (r *MongoRepository) Close(ctx context.Context) error { return r.client.Disconnect(ctx) }
 
 func NewHost(name, dockerHost, tlsCA, tlsCert, tlsKey, note string) model.Host {
 	now := time.Now().UTC()

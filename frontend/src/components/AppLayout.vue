@@ -270,4 +270,72 @@ async function logout() {
 .pro-page {
   width: 100%;
 }
+
+@media (max-width: 900px) {
+  .pro-main { padding: 16px; }
+  .pro-user-name, .pro-role-tag { display: none; }
+}
+
+@media (max-width: 640px) {
+  .pro-shell { display: block; padding-bottom: 64px; }
+
+  .pro-sider {
+    position: fixed;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 100;
+    width: 100% !important;
+    height: 64px;
+    border-top: 1px solid rgba(255, 255, 255, .12);
+  }
+
+  .pro-logo { display: none; }
+
+  .pro-menu {
+    display: flex;
+    width: 100%;
+    padding: 0;
+  }
+
+  .pro-menu :deep(.el-menu-item) {
+    flex: 1;
+    height: 64px;
+    margin: 0;
+    padding: 0 !important;
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
+    border-radius: 0;
+    font-size: 10px;
+    line-height: 1.2;
+  }
+
+  .pro-menu :deep(.el-menu-item .el-icon) {
+    width: auto;
+    margin: 0;
+    font-size: 19px;
+  }
+
+  .pro-menu :deep(.el-menu-item .el-menu-tooltip__trigger) {
+    position: static;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 0 !important;
+  }
+
+  .pro-header {
+    height: 52px;
+    padding: 0 12px;
+  }
+
+  .pro-collapse-btn { display: none; }
+  .pro-header-left { min-width: 0; gap: 0; }
+  .pro-breadcrumb { min-width: 0; font-size: 12px; }
+  .pro-user { padding: 4px; }
+  .pro-avatar { width: 30px !important; height: 30px !important; }
+  .pro-main { padding: 12px; }
+}
 </style>

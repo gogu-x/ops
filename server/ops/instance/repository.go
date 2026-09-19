@@ -3,15 +3,14 @@ package instance
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
-	"github.com/gogu-x/ops/conf"
 	"github.com/gogu-x/ops/ops/internal/model"
+	"github.com/gogu-x/ops/ops/mongorpc"
 	"github.com/google/uuid"
 	"go.mongodb.org/mongo-driver/v2/bson"
-	"go.mongodb.org/mongo-driver/v2/mongo"
-	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 var ErrNotFound = errors.New("service instance not found")
@@ -23,7 +22,6 @@ type Repository interface {
 	Create(ctx context.Context, item model.ServiceInstance) error
 	Update(ctx context.Context, item model.ServiceInstance) error
 	Delete(ctx context.Context, id string) error
-	Close(ctx context.Context) error
 }
 
 type MemoryRepository struct {
@@ -92,87 +90,57 @@ func (r *MemoryRepository) Delete(_ context.Context, id string) error {
 	return nil
 }
 
-func (r *MemoryRepository) Close(context.Context) error { return nil }
+type MongoRepository struct{ actor string }
 
-type MongoRepository struct {
-	client *mongo.Client
-	items  *mongo.Collection
-}
+func NewMongoRepository(actor string) *MongoRepository { return &MongoRepository{actor: actor} }
 
-func NewMongoRepository(ctx context.Context, cfg conf.Config) (*MongoRepository, error) {
-	clientOptions := options.Client().ApplyURI(cfg.MongoURI)
-	if cfg.MongoUsername != "" {
-		clientOptions.SetAuth(options.Credential{Username: cfg.MongoUsername, Password: cfg.MongoPassword})
-	}
-	client, err := mongo.Connect(clientOptions)
-	if err != nil {
-		return nil, err
-	}
-	if err := client.Ping(ctx, nil); err != nil {
-		_ = client.Disconnect(context.Background())
-		return nil, err
-	}
-	return &MongoRepository{client: client, items: client.Database(cfg.MongoDatabase).Collection("service_instances")}, nil
-}
-
-func (r *MongoRepository) List(ctx context.Context) ([]model.ServiceInstance, error) {
-	cursor, err := r.items.Find(ctx, bson.M{})
-	if err != nil {
-		return nil, err
-	}
-	defer cursor.Close(ctx)
+func (r *MongoRepository) List(context.Context) ([]model.ServiceInstance, error) {
 	var result []model.ServiceInstance
-	if err := cursor.All(ctx, &result); err != nil {
-		return nil, err
-	}
-	return result, nil
+	_, err := mongorpc.Request(r.actor, &mongorpc.FindMany{Collection: "service_instances", Filter: bson.M{}, Results: &result})
+	return result, err
 }
 
-func (r *MongoRepository) Get(ctx context.Context, id string) (model.ServiceInstance, error) {
+func (r *MongoRepository) Get(_ context.Context, id string) (model.ServiceInstance, error) {
 	var item model.ServiceInstance
-	if err := r.items.FindOne(ctx, bson.M{"_id": id}).Decode(&item); err != nil {
-		if errors.Is(err, mongo.ErrNoDocuments) {
-			return model.ServiceInstance{}, ErrNotFound
-		}
-		return model.ServiceInstance{}, err
+	_, err := mongorpc.Request(r.actor, &mongorpc.FindOne{Collection: "service_instances", Filter: bson.M{"_id": id}, Result: &item})
+	if err != nil && strings.Contains(err.Error(), "no documents") {
+		return model.ServiceInstance{}, ErrNotFound
 	}
-	return item, nil
+	return item, err
 }
 
-func (r *MongoRepository) Create(ctx context.Context, item model.ServiceInstance) error {
-	_, err := r.items.InsertOne(ctx, item)
-	if mongo.IsDuplicateKeyError(err) {
+func (r *MongoRepository) Create(_ context.Context, item model.ServiceInstance) error {
+	_, err := mongorpc.Request(r.actor, &mongorpc.InsertOne{Collection: "service_instances", Doc: item})
+	if err != nil && strings.Contains(err.Error(), "duplicate key") {
 		return ErrAlreadyExists
 	}
 	return err
 }
 
-func (r *MongoRepository) Update(ctx context.Context, item model.ServiceInstance) error {
-	result, err := r.items.ReplaceOne(ctx, bson.M{"_id": item.ID}, item)
+func (r *MongoRepository) Update(_ context.Context, item model.ServiceInstance) error {
+	v, err := mongorpc.Request(r.actor, &mongorpc.ReplaceOne{Collection: "service_instances", Filter: bson.M{"_id": item.ID}, Replacement: item})
 	if err != nil {
-		if mongo.IsDuplicateKeyError(err) {
+		if strings.Contains(err.Error(), "duplicate key") {
 			return ErrAlreadyExists
 		}
 		return err
 	}
-	if result.MatchedCount == 0 {
+	if v.(mongorpc.WriteResult).MatchedCount == 0 {
 		return ErrNotFound
 	}
 	return nil
 }
 
-func (r *MongoRepository) Delete(ctx context.Context, id string) error {
-	result, err := r.items.DeleteOne(ctx, bson.M{"_id": id})
+func (r *MongoRepository) Delete(_ context.Context, id string) error {
+	v, err := mongorpc.Request(r.actor, &mongorpc.DeleteOne{Collection: "service_instances", Filter: bson.M{"_id": id}})
 	if err != nil {
 		return err
 	}
-	if result.DeletedCount == 0 {
+	if v.(mongorpc.WriteResult).DeletedCount == 0 {
 		return ErrNotFound
 	}
 	return nil
 }
-
-func (r *MongoRepository) Close(ctx context.Context) error { return r.client.Disconnect(ctx) }
 
 func NewServiceInstance(serviceTypeID, name, image, note, envText, network, portMapping string, params []model.ServiceParam) model.ServiceInstance {
 	now := time.Now().UTC()

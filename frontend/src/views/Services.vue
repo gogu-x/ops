@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Edit, Delete, Box, FolderOpened, Monitor, CaretRight, CaretBottom, Key, VideoPlay, VideoPause, RefreshRight, Refresh, Upload, Document, InfoFilled } from '@element-plus/icons-vue'
+import { Plus, Edit, Delete, Box, Monitor, CaretRight, CaretBottom, VideoPlay, VideoPause, RefreshRight, Refresh, Upload, Document, InfoFilled, Search } from '@element-plus/icons-vue'
 import { useAuthStore } from '../stores/auth'
 import { serviceApi, type ServiceType, type ServiceTypeForm } from '../api/services'
 import { hostApi, type Host } from '../api/hosts'
@@ -22,6 +22,8 @@ const canManage = computed(() => auth.user?.role === 'admin')
 const activeProjectId = ref<string>('')
 const expandedHostId = ref<string>('')
 const activeTypeId = ref<string>('')
+const keyword = ref('')
+const statusFilter = ref('all')
 
 function hostsInProject(projectId: string): Host[] {
   const hostIds = new Set(types.value.filter((t) => t.project_id === projectId).map((t) => t.host_id))
@@ -43,15 +45,13 @@ function countInType(typeId: string): number {
 
 function toggleHost(hostId: string) {
   expandedHostId.value = expandedHostId.value === hostId ? '' : hostId
-}
-
-function selectType(type: ServiceType) {
-  activeTypeId.value = type.id
+  if (expandedHostId.value && !typesInHost(activeProjectId.value, hostId).some((type) => type.id === activeTypeId.value)) {
+    activeTypeId.value = typesInHost(activeProjectId.value, hostId)[0]?.id || ''
+  }
 }
 
 const activeType = computed(() => types.value.find((t) => t.id === activeTypeId.value) || null)
 const activeProject = computed(() => (activeType.value ? projects.value.find((p) => p.id === activeType.value!.project_id) : null))
-const activeHost = computed(() => (activeType.value ? hosts.value.find((h) => h.id === activeType.value!.host_id) : null))
 const currentProject = computed(() => projects.value.find((p) => p.id === activeProjectId.value) || null)
 
 const visibleInstances = computed(() => {
@@ -59,9 +59,15 @@ const visibleInstances = computed(() => {
   return instances.value.filter((i) => i.service_type_id === activeTypeId.value)
 })
 
-function hostName(id: string): string {
-  return hosts.value.find((h) => h.id === id)?.name || id || '未绑定'
-}
+const filteredInstances = computed(() => {
+  const normalizedKeyword = keyword.value.trim().toLowerCase()
+  return visibleInstances.value.filter((item) => {
+    const matchesStatus = statusFilter.value === 'all' || item.status === statusFilter.value
+    const matchesKeyword = !normalizedKeyword || [item.name, item.image, item.note]
+      .some((value) => value?.toLowerCase().includes(normalizedKeyword))
+    return matchesStatus && matchesKeyword
+  })
+})
 
 async function loadAll() {
   loading.value = true
@@ -82,11 +88,20 @@ async function loadAll() {
     if (activeTypeId.value && !types.value.some((t) => t.id === activeTypeId.value)) {
       activeTypeId.value = ''
     }
+    selectFirstAvailableType()
   } catch {
     ElMessage.error('数据加载失败')
   } finally {
     loading.value = false
   }
+}
+
+function selectFirstAvailableType() {
+  if (!activeProjectId.value || activeTypeId.value) return
+  const firstHost = hostsInProject(activeProjectId.value)[0]
+  if (!firstHost) return
+  expandedHostId.value = firstHost.id
+  activeTypeId.value = typesInHost(activeProjectId.value, firstHost.id)[0]?.id || ''
 }
 
 // -------- 类型（分类）表单 --------
@@ -236,6 +251,14 @@ async function removeInstance(item: ServiceInstance) {
 watch(activeProjectId, () => {
   activeTypeId.value = ''
   expandedHostId.value = ''
+  keyword.value = ''
+  statusFilter.value = 'all'
+  selectFirstAvailableType()
+})
+
+watch(activeTypeId, () => {
+  keyword.value = ''
+  statusFilter.value = 'all'
 })
 
 // -------- 容器状态展示 + 部署/启停/日志 --------
@@ -254,6 +277,24 @@ function statusLabel(row: ServiceInstance) {
 
 function statusType(row: ServiceInstance) {
   return statusMeta[row.status]?.type || 'info'
+}
+
+function formatRelativeTime(value?: string) {
+  if (!value) return '尚未启动'
+  const timestamp = new Date(value).getTime()
+  if (Number.isNaN(timestamp)) return '启动时间未知'
+  const minutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60000))
+  if (minutes < 1) return '刚刚启动'
+  if (minutes < 60) return `${minutes} 分钟前启动`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours} 小时前启动`
+  return `${Math.floor(hours / 24)} 天前启动`
+}
+
+async function refreshVisibleInstances() {
+  if (!visibleInstances.value.length) return
+  await Promise.all(visibleInstances.value.map((row) => refreshInstanceStatus(row)))
+  ElMessage.success('实例状态已刷新')
 }
 
 const actionLoadingId = ref('')
@@ -434,112 +475,149 @@ onUnmounted(stopStatusPolling)
 
 <template>
   <AppLayout>
-    <div class="page-heading-actions-only">
-      <el-button v-if="canManage" type="primary" :icon="Plus" @click="openCreateType">添加服务类型</el-button>
+    <div class="services-heading">
+      <div>
+        <h2>服务管理</h2>
+        <p>集中查看服务运行状态，并完成部署、更新与日常运维。</p>
+      </div>
+      <div class="heading-actions">
+        <el-button :icon="Refresh" :loading="loading" @click="loadAll">刷新数据</el-button>
+        <el-button v-if="canManage" type="primary" :icon="Plus" @click="openCreateType">添加服务类型</el-button>
+      </div>
     </div>
 
-    <div class="project-tabs">
-      <div
-        v-for="project in projects"
-        :key="project.id"
-        class="project-tab"
-        :class="{ active: activeProjectId === project.id }"
-        @click="activeProjectId = project.id"
-      >
-        <el-icon><FolderOpened /></el-icon>
-        <span class="project-tab-name">{{ project.name }}</span>
-        <span class="project-tab-count">{{ countInProject(project.id) }}</span>
+    <div class="mobile-project-filter">
+      <span class="mobile-project-title">项目</span>
+      <div class="mobile-project-list">
+        <button
+          v-for="project in projects"
+          :key="project.id"
+          type="button"
+          :class="{ active: activeProjectId === project.id }"
+          @click="activeProjectId = project.id"
+        >
+          <span>{{ project.name }}</span><em>{{ countInProject(project.id) }}</em>
+        </button>
       </div>
-      <el-empty v-if="!projects.length" description="暂无项目，请先前往「项目管理」新建项目" :image-size="40" class="project-tabs-empty" />
     </div>
+
+    <el-empty v-if="!loading && !projects.length" description="暂无项目，请先前往「项目管理」新建项目" :image-size="54" />
 
     <el-card class="plain-card master-detail" shadow="never" v-loading="loading">
-      <aside class="project-nav">
-        <div v-for="host in hostsInProject(activeProjectId)" :key="host.id" class="nav-subgroup">
-          <div
-            class="nav-item level-host"
-            :class="{ expanded: expandedHostId === host.id }"
-            @click="toggleHost(host.id)"
-          >
-            <el-icon class="nav-caret"><component :is="expandedHostId === host.id ? CaretBottom : CaretRight" /></el-icon>
-            <el-icon><Monitor /></el-icon>
-            <span class="nav-name">{{ host.name }}</span>
-            <span class="nav-count">{{ typesInHost(activeProjectId, host.id).reduce((sum, t) => sum + countInType(t.id), 0) }}</span>
-          </div>
-
-          <div v-if="expandedHostId === host.id" class="nav-children">
-            <div
-              v-for="type in typesInHost(activeProjectId, host.id)"
-              :key="type.id"
-              class="nav-item level-type"
-              :class="{ active: activeTypeId === type.id }"
-              @click="selectType(type)"
-            >
-              <el-icon :size="13"><Box /></el-icon>
-              <span class="nav-name">{{ type.name }}</span>
-              <span class="nav-count">{{ countInType(type.id) }}</span>
-              <span v-if="canManage" class="nav-manage">
-                <el-icon @click.stop="openEditType(type)"><Edit /></el-icon>
-                <el-icon @click.stop="removeType(type)"><Delete /></el-icon>
-              </span>
-            </div>
-            <el-empty
-              v-if="!typesInHost(activeProjectId, host.id).length"
-              description="暂无类型"
-              :image-size="36"
-              class="nav-empty"
-            />
-          </div>
+      <aside class="filter-sidebar">
+        <div class="filter-heading">
+          <div><span>筛选条件</span><small>{{ visibleInstances.length }} 个实例</small></div>
+          <el-button v-if="canManage" text :icon="Plus" @click="openCreateType">添加</el-button>
         </div>
-        <el-empty v-if="activeProjectId && !hostsInProject(activeProjectId).length" description="暂无主机" :image-size="36" class="nav-empty" />
-        <el-empty v-if="!activeProjectId" description="请先选择项目" :image-size="36" class="nav-empty" />
+
+        <div class="tree-label">主机 / 服务类型</div>
+        <div class="service-tree">
+          <div v-for="host in hostsInProject(activeProjectId)" :key="host.id" class="tree-host-group">
+            <button type="button" class="tree-host" :class="{ expanded: expandedHostId === host.id }" @click="toggleHost(host.id)">
+              <el-icon class="tree-caret"><component :is="expandedHostId === host.id ? CaretBottom : CaretRight" /></el-icon>
+              <span class="tree-host-icon"><el-icon><Monitor /></el-icon></span>
+              <span class="tree-name">{{ host.name }}</span>
+              <em>{{ typesInHost(activeProjectId, host.id).reduce((sum, type) => sum + countInType(type.id), 0) }}</em>
+            </button>
+            <div v-if="expandedHostId === host.id" class="tree-types">
+              <button
+                v-for="type in typesInHost(activeProjectId, host.id)"
+                :key="type.id"
+                type="button"
+                class="tree-type"
+                :class="{ active: activeTypeId === type.id }"
+                @click="activeTypeId = type.id"
+              >
+                <span class="tree-line"></span>
+                <el-icon><Box /></el-icon>
+                <span class="tree-name">{{ type.name }}</span>
+                <em>{{ countInType(type.id) }}</em>
+                <span v-if="canManage" class="tree-type-actions">
+                  <el-tooltip content="编辑类型" placement="top">
+                    <span class="tree-action" @click.stop="openEditType(type)"><el-icon><Edit /></el-icon></span>
+                  </el-tooltip>
+                  <el-tooltip content="删除类型" placement="top">
+                    <span class="tree-action danger" @click.stop="removeType(type)"><el-icon><Delete /></el-icon></span>
+                  </el-tooltip>
+                </span>
+              </button>
+              <div v-if="!typesInHost(activeProjectId, host.id).length" class="filter-empty">暂无服务类型</div>
+            </div>
+          </div>
+          <div v-if="!hostsInProject(activeProjectId).length" class="filter-empty">当前项目暂无主机</div>
+        </div>
+
       </aside>
 
       <section class="service-panel">
         <template v-if="activeType">
-          <div class="service-panel-header">
-            <span class="service-panel-title">{{ activeType.name }}</span>
-            <el-tag size="small" type="info" effect="plain" round>{{ activeProject?.name }}</el-tag>
-            <el-tag size="small" type="info" effect="plain" round>{{ activeHost?.name }}</el-tag>
-            <div class="service-panel-actions">
-              <el-button v-if="canManage" size="small" type="primary" :icon="Plus" @click="openCreateInstance">部署服务</el-button>
-            </div>
+          <div class="service-toolbar">
+            <el-input v-model="keyword" :prefix-icon="Search" clearable placeholder="搜索实例名称、镜像或备注" class="service-search" />
+            <el-select v-model="statusFilter" class="status-filter" aria-label="状态筛选">
+              <el-option label="全部状态" value="all" />
+              <el-option label="运行中" value="running" />
+              <el-option label="已停止" value="stopped" />
+              <el-option label="未部署" value="not_deployed" />
+              <el-option label="部署失败" value="error" />
+            </el-select>
+            <span class="result-count">{{ filteredInstances.length }} 个结果</span>
+            <el-button :icon="Refresh" @click="refreshVisibleInstances">刷新</el-button>
+            <el-button v-if="canManage" type="primary" :icon="Plus" @click="openCreateInstance">部署服务</el-button>
           </div>
 
           <div class="service-list">
-            <div v-for="row in visibleInstances" :key="row.id" class="service-item">
-              <div class="service-item-icon">
+            <div v-for="row in filteredInstances" :key="row.id" class="service-item" :class="`status-${row.status}`">
+              <div class="service-item-icon" :class="`status-${row.status}`">
                 <el-icon :size="18"><Box /></el-icon>
               </div>
               <div class="service-item-main">
                 <div class="service-item-title-row">
                   <span class="service-item-name">{{ row.name }}</span>
                   <el-tag size="small" :type="statusType(row)" effect="light" round>{{ statusLabel(row) }}</el-tag>
-                  <el-tag v-if="row.env_text" size="small" type="success" effect="plain" round>
-                    <el-icon style="vertical-align: -2px; margin-right: 2px"><Key /></el-icon>已配置环境变量
-                  </el-tag>
                 </div>
-                <div class="service-item-image">{{ row.image }}</div>
+                <div class="service-meta-grid">
+                  <div class="meta-block image-meta">
+                    <small>镜像</small>
+                    <span class="service-item-image" :title="row.image">{{ row.image }}</span>
+                  </div>
+                  <div class="meta-block">
+                    <small>网络</small>
+                    <span>{{ row.network || '默认网络' }}</span>
+                  </div>
+                  <div class="meta-block">
+                    <small>端口</small>
+                    <span>{{ row.port_mapping || '未映射' }}</span>
+                  </div>
+                  <div class="meta-block time-meta">
+                    <small>运行时间</small>
+                    <span>{{ formatRelativeTime(row.started_at) }}</span>
+                  </div>
+                </div>
                 <div v-if="row.status === 'error' && row.deploy_error" class="service-item-error">部署失败：{{ row.deploy_error }}</div>
                 <div v-if="row.note" class="service-item-note">{{ row.note }}</div>
               </div>
               <div class="service-item-actions">
                 <template v-if="canManage">
-                  <el-button v-if="row.status === 'not_deployed' || row.status === 'error'" link type="primary" :icon="Upload" :loading="actionLoadingId === row.id" @click="deployInstance(row)">部署</el-button>
-                  <el-button v-if="row.status === 'stopped'" link type="success" :icon="VideoPlay" :loading="actionLoadingId === row.id" @click="startInstance(row)">启动</el-button>
-                  <el-button v-if="row.status === 'running' || row.status === 'restarting'" link type="warning" :icon="VideoPause" :loading="actionLoadingId === row.id" @click="stopInstance(row)">停止</el-button>
-                  <el-button v-if="row.status === 'running'" link type="primary" :icon="RefreshRight" :loading="actionLoadingId === row.id" @click="restartInstance(row)">重启</el-button>
-                  <el-button v-if="row.status !== 'not_deployed'" link type="primary" :icon="Refresh" @click="openUpdateImage(row)">更新镜像</el-button>
+                  <el-button v-if="row.status === 'not_deployed' || row.status === 'error'" type="primary" :icon="Upload" :loading="actionLoadingId === row.id" @click="deployInstance(row)">部署</el-button>
+                  <el-button v-if="row.status === 'stopped'" type="success" plain :icon="VideoPlay" :loading="actionLoadingId === row.id" @click="startInstance(row)">启动</el-button>
+                  <el-button v-if="row.status === 'running' || row.status === 'restarting'" plain :icon="VideoPause" :loading="actionLoadingId === row.id" @click="stopInstance(row)">停止</el-button>
+                  <el-button v-if="row.status === 'running'" plain :icon="RefreshRight" :loading="actionLoadingId === row.id" @click="restartInstance(row)">重启</el-button>
+                  <el-button v-if="row.status !== 'not_deployed'" plain type="primary" :icon="Refresh" @click="openUpdateImage(row)">更新</el-button>
                 </template>
-                <el-button v-if="row.status !== 'not_deployed'" link type="info" :icon="InfoFilled" @click="viewDetail(row)">详情</el-button>
-                <el-button v-if="row.status !== 'not_deployed'" link type="info" :icon="Document" @click="viewLogs(row)">日志</el-button>
-                <template v-if="canManage">
-                  <el-button link type="primary" :icon="Edit" @click="openEditInstance(row)">编辑</el-button>
-                  <el-button link type="danger" :icon="Delete" @click="removeInstance(row)">删除</el-button>
-                </template>
+                <el-dropdown trigger="click">
+                  <el-button plain>更多操作</el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item v-if="row.status !== 'not_deployed'" :icon="InfoFilled" @click="viewDetail(row)">容器详情</el-dropdown-item>
+                      <el-dropdown-item v-if="row.status !== 'not_deployed'" :icon="Document" @click="viewLogs(row)">查看日志</el-dropdown-item>
+                      <el-dropdown-item v-if="canManage" :icon="Edit" divided @click="openEditInstance(row)">编辑配置</el-dropdown-item>
+                      <el-dropdown-item v-if="canManage" :icon="Delete" class="danger-menu-item" @click="removeInstance(row)">删除实例</el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
               </div>
             </div>
-            <el-empty v-if="!loading && !visibleInstances.length" description="该类型暂无实例，点击右上角部署服务" :image-size="60" />
+            <el-empty v-if="!loading && !filteredInstances.length" :description="visibleInstances.length ? '没有符合筛选条件的实例' : '该类型暂无实例，点击右上角部署服务'" :image-size="60" />
           </div>
         </template>
 
@@ -722,17 +800,37 @@ onUnmounted(stopStatusPolling)
 </template>
 
 <style scoped>
-.page-heading-actions-only {
+.services-heading {
   display: flex;
-  justify-content: flex-end;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 20px;
+}
+
+.services-heading h2 {
+  margin: 0;
+  color: var(--ops-text);
+  font-size: 22px;
+  line-height: 1.35;
+}
+
+.services-heading p {
+  margin: 6px 0 0;
+  color: var(--ops-text-secondary);
+  font-size: 13px;
+}
+
+.heading-actions {
+  display: flex;
   gap: 10px;
-  margin-bottom: 12px;
 }
 
 .plain-card {
-  border-radius: 6px;
+  border-radius: 12px;
   border: 1px solid var(--ops-border);
-  box-shadow: none;
+  box-shadow: 0 8px 28px rgba(31, 45, 61, .05);
+  overflow: hidden;
 }
 
 .plain-card :deep(.el-card__body) {
@@ -744,6 +842,221 @@ onUnmounted(stopStatusPolling)
   align-items: stretch;
   min-height: calc(100vh - 220px);
 }
+
+.master-detail {
+  width: 100%;
+}
+
+.mobile-project-filter {
+  display: block;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--ops-border);
+  border-radius: 9px;
+  background: #fff;
+  box-shadow: var(--ops-shadow);
+}
+
+.mobile-project-title { display: block; margin-bottom: 8px; color: #697586; font-size: 11px; font-weight: 600; }
+.mobile-project-list { display: flex; gap: 7px; margin: 0 -12px; padding: 0 12px 2px; overflow-x: auto; scrollbar-width: none; }
+.mobile-project-list::-webkit-scrollbar { display: none; }
+.mobile-project-list button { display: flex; align-items: center; gap: 7px; flex: 0 0 auto; padding: 7px 11px; border: 1px solid var(--ops-border); border-radius: 7px; background: #fff; color: #586779; font: inherit; font-size: 12px; cursor: pointer; }
+.mobile-project-list button:hover { border-color: #9fc8ff; color: var(--ops-primary); }
+.mobile-project-list button.active { border-color: var(--ops-primary); background: var(--ops-primary); color: #fff; }
+.mobile-project-list em { min-width: 18px; padding: 1px 5px; border-radius: 999px; background: #eef2f6; color: #778495; font-size: 10px; font-style: normal; text-align: center; }
+.mobile-project-list button.active em { background: rgba(255,255,255,.22); color: #fff; }
+
+.filter-sidebar {
+  width: 232px;
+  flex: 0 0 232px;
+  padding: 18px 14px;
+  border-right: 1px solid var(--ops-border);
+  background: linear-gradient(180deg, #fbfcfe 0%, #f7f9fc 100%);
+}
+
+.filter-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18px;
+  padding: 0 2px 12px;
+  border-bottom: 1px solid #e9edf2;
+}
+
+.filter-heading > div { display: flex; flex-direction: column; gap: 3px; }
+.filter-heading span { color: var(--ops-text); font-size: 14px; font-weight: 700; }
+.filter-heading small { color: var(--ops-text-secondary); font-size: 11px; font-weight: 400; }
+.filter-heading .el-button { padding: 5px; }
+
+.filter-label {
+  display: block;
+  margin: 0 2px 6px;
+  color: #697586;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.filter-select { width: 100%; margin-bottom: 16px; }
+.filter-select :deep(.el-select__wrapper) { min-height: 36px; border-radius: 7px; box-shadow: 0 0 0 1px #dde3eb inset; }
+.filter-select :deep(.el-select__wrapper:hover) { box-shadow: 0 0 0 1px #9fc8ff inset; }
+
+.tree-label { margin: 0 4px 8px; color: #697586; font-size: 11px; font-weight: 600; }
+.service-tree { display: flex; flex-direction: column; gap: 3px; }
+.tree-host-group { min-width: 0; }
+.tree-host, .tree-type { display: flex; align-items: center; width: 100%; border: 0; background: transparent; color: #526071; font: inherit; cursor: pointer; }
+.tree-host { gap: 7px; padding: 9px 8px; border-radius: 7px; font-size: 12px; font-weight: 600; }
+.tree-host:hover, .tree-host.expanded { background: #edf3fa; color: #2d5f91; }
+.tree-caret { flex: 0 0 auto; color: #8c98a7; font-size: 11px; }
+.tree-host-icon { display: grid; width: 24px; height: 24px; flex: 0 0 auto; place-items: center; border-radius: 6px; background: #e3e9f0; color: #60758a; }
+.tree-name { min-width: 0; flex: 1; overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.tree-host em, .tree-type em { min-width: 20px; padding: 1px 5px; border-radius: 999px; background: #fff; color: #8491a3; font-size: 10px; font-style: normal; text-align: center; }
+.tree-types { position: relative; margin: 2px 0 5px 18px; padding-left: 12px; border-left: 1px solid #d9e1ea; }
+.tree-type { position: relative; gap: 7px; padding: 8px 7px; border-radius: 6px; font-size: 12px; }
+.tree-type:hover { background: #edf3fa; color: var(--ops-primary); }
+.tree-type.active { background: #e4f1ff; color: var(--ops-primary); font-weight: 600; }
+.tree-line { position: absolute; left: -13px; width: 10px; height: 1px; background: #d9e1ea; }
+.tree-type.active em { background: var(--ops-primary); color: #fff; }
+.tree-type-actions { display: flex; align-items: center; gap: 2px; margin-left: 1px; }
+.tree-action { display: grid; width: 22px; height: 22px; place-items: center; border-radius: 5px; color: #718096; font-size: 12px; transition: background .15s, color .15s; }
+.tree-action:hover { background: #d8eaff; color: var(--ops-primary); }
+.tree-action.danger:hover { background: #fee9e9; color: var(--el-color-danger); }
+.tree-type.active .tree-action { color: #3977b7; }
+
+.type-list-heading { display: flex; align-items: center; justify-content: space-between; margin-top: 2px; }
+.type-list-heading > span { min-width: 20px; padding: 1px 6px; border-radius: 999px; background: #e9edf3; color: #718096; font-size: 10px; text-align: center; }
+.filter-type-list { display: flex; flex-direction: column; gap: 4px; margin-top: 2px; }
+
+.filter-type-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #526071;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background .16s, color .16s;
+}
+
+.filter-type-item:hover { background: #edf3fa; color: var(--ops-primary); }
+.filter-type-item.active { background: #e7f2ff; color: var(--ops-primary); font-weight: 600; }
+.filter-type-icon { display: grid; width: 25px; height: 25px; flex: 0 0 auto; place-items: center; border-radius: 6px; background: #e9edf3; }
+.filter-type-item.active .filter-type-icon { background: var(--ops-primary); color: #fff; }
+.filter-type-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.filter-type-item em { min-width: 20px; padding: 1px 5px; border-radius: 999px; background: #fff; color: #8491a3; font-size: 10px; font-style: normal; text-align: center; }
+.filter-empty { padding: 18px 4px; color: var(--ops-text-secondary); font-size: 12px; text-align: center; }
+.filter-actions { display: flex; justify-content: space-between; margin-top: 14px; padding-top: 10px; border-top: 1px solid #e9edf2; }
+.filter-actions .el-button + .el-button { margin-left: 0; }
+
+.scope-selector {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--ops-border);
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: var(--ops-shadow);
+}
+
+.scope-title {
+  align-self: center;
+  margin-right: 4px;
+  color: var(--ops-text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.scope-field {
+  width: 210px;
+  min-width: 0;
+}
+
+.scope-field.type-field { width: 230px; }
+.scope-field label { display: block; margin: 0 0 5px 2px; color: var(--ops-text-secondary); font-size: 11px; }
+.scope-select { width: 100%; }
+.scope-separator { align-self: center; margin-top: 17px; color: #c5ccd5; font-size: 16px; }
+.scope-actions { display: flex; align-items: center; gap: 2px; margin-left: auto; padding-bottom: 1px; }
+.scope-result { align-self: center; color: var(--ops-text-secondary); font-size: 12px; white-space: nowrap; }
+.scope-actions .el-button + .el-button { margin-left: 0; }
+.option-count { float: right; margin-left: 24px; color: var(--ops-text-secondary); font-size: 11px; }
+
+.deployment-explorer {
+  padding: 20px 24px 18px;
+  border-bottom: 1px solid var(--ops-border);
+  background: #fff;
+}
+
+.explorer-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.explorer-heading h3 { margin: 1px 0 0; font-size: 16px; }
+.explorer-heading > span { color: var(--ops-text-secondary); font-size: 12px; }
+.explorer-eyebrow { color: var(--ops-primary); font-size: 9px; font-weight: 800; letter-spacing: .12em; }
+
+.host-selector {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
+}
+
+.host-option {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--ops-border);
+  border-radius: 9px;
+  background: #fff;
+  color: var(--ops-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: .18s ease;
+}
+
+.host-option:hover { border-color: #9fc8ff; background: #f8fbff; }
+.host-option.active { border-color: var(--ops-primary); background: #f2f8ff; box-shadow: inset 0 0 0 1px var(--ops-primary); }
+.host-option-icon { display: grid; width: 34px; height: 34px; flex: 0 0 auto; place-items: center; border-radius: 8px; background: #edf2f7; color: #61758a; }
+.host-option.active .host-option-icon { background: var(--ops-primary); color: #fff; }
+.host-option-content { min-width: 0; flex: 1; }
+.host-option-content strong, .host-option-content small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.host-option-content strong { font-size: 13px; }
+.host-option-content small { margin-top: 3px; color: var(--ops-text-secondary); font-size: 11px; }
+.host-option-state { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: #67c23a; box-shadow: 0 0 0 3px rgba(103, 194, 58, .12); }
+
+.type-selector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed #e3e8ef;
+  overflow-x: auto;
+}
+
+.type-selector-label { flex: 0 0 auto; margin-right: 2px; color: var(--ops-text-secondary); font-size: 11px; }
+.type-option { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; padding: 7px 10px; border: 1px solid var(--ops-border); border-radius: 999px; background: #fff; color: #586779; font: inherit; font-size: 12px; cursor: pointer; }
+.type-option:hover { border-color: #9fc8ff; color: var(--ops-primary); }
+.type-option.active { border-color: var(--ops-primary); background: var(--ops-primary); color: #fff; }
+.type-option em { min-width: 18px; padding: 1px 5px; border-radius: 999px; background: #eef2f6; color: #778495; font-size: 10px; font-style: normal; text-align: center; }
+.type-option.active em { background: rgba(255,255,255,.2); color: #fff; }
+.type-manage { display: flex; gap: 5px; margin-left: 2px; padding-left: 7px; border-left: 1px solid currentColor; opacity: .7; }
+.type-manage .el-icon:hover { opacity: 1; }
+.type-empty { color: var(--ops-text-secondary); font-size: 12px; }
 
 .project-tabs {
   display: flex;
@@ -802,21 +1115,83 @@ onUnmounted(stopStatusPolling)
   padding: 8px 0;
 }
 
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.summary-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 76px;
+  padding: 14px 16px;
+  background: #fff;
+  border: 1px solid var(--ops-border);
+  border-radius: 8px;
+}
+
+.summary-icon {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  font-size: 19px;
+  background: var(--ops-primary-light);
+  color: var(--ops-primary);
+}
+
+.summary-card.success .summary-icon { background: #f0f9eb; color: #45a52e; }
+.summary-card.warning .summary-icon { background: #fdf6ec; color: #e6a23c; }
+.summary-card.danger .summary-icon { background: #fef0f0; color: #e64c4c; }
+
+.summary-card span {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--ops-text-secondary);
+  font-size: 12px;
+}
+
+.summary-card strong {
+  color: var(--ops-text);
+  font-size: 24px;
+  line-height: 1;
+}
+
 .project-nav {
-  width: 260px;
+  width: 248px;
   flex-shrink: 0;
   border-right: 1px solid var(--ops-border);
-  padding: 12px 0 12px 4px;
+  padding: 18px 10px;
   display: flex;
   flex-direction: column;
   overflow-y: auto;
+}
+
+.nav-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8px 14px;
+  color: var(--ops-text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.nav-heading small {
+  color: var(--ops-text-secondary);
+  font-weight: 400;
 }
 
 .nav-item {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 9px 12px;
+  padding: 10px 10px;
+  border-radius: 7px;
   font-size: 14px;
   color: var(--ops-text-secondary);
   cursor: pointer;
@@ -833,12 +1208,13 @@ onUnmounted(stopStatusPolling)
 }
 
 .nav-item.level-type {
-  padding-left: 30px;
+  margin: 2px 0 2px 18px;
+  padding-left: 12px;
   font-size: 13px;
 }
 
 .nav-item.level-type.active {
-  background: var(--ops-primary-light);
+  background: linear-gradient(90deg, #e9f4ff, #f4f9ff);
   color: var(--ops-primary);
   font-weight: 600;
 }
@@ -912,7 +1288,8 @@ onUnmounted(stopStatusPolling)
 .service-panel {
   flex: 1;
   min-width: 0;
-  padding: 16px 20px;
+  padding: 6px 20px 12px;
+  background: #fff;
   display: flex;
   flex-direction: column;
 }
@@ -922,14 +1299,51 @@ onUnmounted(stopStatusPolling)
   align-items: center;
   flex-wrap: wrap;
   gap: 10px;
-  padding-bottom: 14px;
-  margin-bottom: 8px;
+  min-height: 104px;
+  padding: 22px 24px;
   border-bottom: 1px solid var(--ops-border);
+  background:
+    radial-gradient(circle at 78% -50%, rgba(22, 119, 255, .16), transparent 48%),
+    linear-gradient(135deg, #fff 0%, #f6faff 100%);
+}
+
+.service-identity { min-width: 0; }
+
+.service-kicker {
+  margin-bottom: 5px;
+  color: var(--ops-primary);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .08em;
+}
+
+.service-title-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.health-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #c0c4cc;
+}
+
+.health-dot.healthy {
+  background: #55b938;
+  box-shadow: 0 0 0 3px rgba(85, 185, 56, 0.13);
+}
+
+.service-context {
+  margin-top: 5px;
+  color: var(--ops-text-secondary);
+  font-size: 12px;
 }
 
 .service-panel-title {
-  font-size: 16px;
-  font-weight: 600;
+  font-size: 22px;
+  font-weight: 700;
   color: var(--ops-text);
 }
 
@@ -939,6 +1353,20 @@ onUnmounted(stopStatusPolling)
   gap: 6px;
 }
 
+.service-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--ops-border);
+  background: #fff;
+}
+
+.service-search { width: min(360px, 48%); }
+.status-filter { width: 136px; }
+.result-count { margin-left: auto; color: var(--ops-text-secondary); font-size: 12px; }
+
 .service-panel-placeholder {
   margin: auto;
 }
@@ -946,75 +1374,216 @@ onUnmounted(stopStatusPolling)
 .service-list {
   display: flex;
   flex-direction: column;
+  gap: 0;
+  padding: 0;
 }
+
+.service-list > :deep(.el-empty) { grid-column: 1 / -1; }
 
 .service-item {
   display: flex;
-  align-items: flex-start;
-  gap: 14px;
-  padding: 16px 4px;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 16px;
+  min-width: 0;
+  min-height: 0;
+  padding: 18px 4px;
+  margin-bottom: 0;
+  border: 0;
   border-bottom: 1px solid var(--ops-border);
+  border-radius: 0;
+  background: #fff;
+  transition: background .18s;
 }
 
-.service-item:last-child {
-  border-bottom: 0;
+.service-item:hover {
+  border-color: var(--ops-border);
+  box-shadow: none;
+  transform: none;
+  background: #fafcff;
 }
+
+.service-item:last-child { border-bottom: 0; }
 
 .service-item-icon {
   flex-shrink: 0;
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
   background: var(--ops-primary-light);
   color: var(--ops-primary);
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-top: 2px;
+  margin-top: 0;
 }
+
+.service-item-icon.status-running { background: #f0f9eb; color: #55a532; }
+.service-item-icon.status-error { background: #fef0f0; color: #f56c6c; }
+.service-item-icon.status-stopped { background: #fdf6ec; color: #e6a23c; }
 
 .service-item-main {
   flex: 1;
   min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
 }
 
 .service-item-title-row {
   display: flex;
   align-items: center;
+  flex: 0 0 175px;
+  min-width: 0;
   gap: 10px;
-  margin-bottom: 6px;
+  margin-bottom: 0;
 }
 
 .service-item-name {
-  font-size: 15px;
-  font-weight: 600;
+  font-size: 16px;
+  font-weight: 700;
   color: var(--ops-text);
+}
+
+.service-meta-grid {
+  display: grid;
+  flex: 1;
+  min-width: 420px;
+  grid-template-columns: minmax(170px, 1.6fr) minmax(80px, .7fr) minmax(90px, .8fr) minmax(105px, .9fr);
+  gap: 8px 16px;
+}
+
+.meta-block {
+  min-width: 0;
+}
+
+.meta-block small {
+  display: block;
+  margin-bottom: 3px;
+  color: #a0a8b3;
+  font-size: 10px;
+  line-height: 1;
+}
+
+.meta-block > span {
+  display: block;
+  overflow: hidden;
+  color: #526071;
+  font-size: 12px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .service-item-image {
   font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 12px;
-  color: var(--ops-text-secondary);
-  margin-bottom: 6px;
+  color: #52657a;
 }
 
 .service-item-note {
-  margin-top: 8px;
+  flex-basis: 100%;
+  margin: -8px 0 0 195px;
   font-size: 12px;
   color: var(--ops-text-secondary);
 }
 
 .service-item-error {
-  margin-top: 8px;
+  flex-basis: 100%;
+  margin: -8px 0 0 195px;
   font-size: 12px;
   color: var(--el-color-danger);
 }
 
 .service-item-actions {
+  width: auto;
   flex-shrink: 0;
   display: flex;
-  gap: 4px;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 0;
   padding-top: 2px;
+  border-top: 0;
+  align-items: center;
+}
+
+.service-item-actions :deep(.el-button + .el-button) { margin-left: 0; }
+
+:global(.danger-menu-item) { color: var(--el-color-danger); }
+
+@media (max-width: 1100px) {
+  .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .service-item { flex-wrap: wrap; }
+  .service-item-actions { width: 100%; padding: 10px 0 0 58px; }
+  .service-meta-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 900px) {
+  .services-heading { flex-direction: column; gap: 14px; margin-bottom: 14px; }
+  .services-heading h2 { font-size: 20px; }
+  .heading-actions { width: 100%; }
+  .heading-actions .el-button { flex: 1; margin-left: 0; }
+  .mobile-project-filter { margin-bottom: 12px; }
+  .master-detail :deep(.el-card__body) { display: block; min-height: 0; }
+  .filter-sidebar { width: 100%; max-height: none; padding: 14px; border-right: 0; border-bottom: 1px solid var(--ops-border); }
+  .filter-heading { margin-bottom: 10px; padding-bottom: 10px; }
+  .service-tree { max-height: 230px; overflow-y: auto; }
+  .tree-host { padding: 8px; }
+  .tree-types { margin-bottom: 3px; }
+  .tree-type-actions { margin-left: 5px; }
+  .scope-selector { align-items: stretch; flex-direction: column; gap: 9px; padding: 12px; }
+  .scope-title { align-self: flex-start; }
+  .scope-field, .scope-field.type-field { width: 100%; }
+  .scope-field label { margin-bottom: 4px; }
+  .scope-separator { display: none; }
+  .scope-actions { width: 100%; margin-left: 0; padding-top: 4px; border-top: 1px solid #eef1f5; }
+  .scope-actions .el-button { flex: 1; }
+  .scope-result { align-self: flex-start; }
+  .project-tabs { flex-wrap: nowrap; margin: 0 -12px 14px; padding: 0 12px 4px; overflow-x: auto; scrollbar-width: none; }
+  .project-tabs::-webkit-scrollbar { display: none; }
+  .project-tab { flex: 0 0 auto; }
+  .summary-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .summary-card { min-height: 68px; padding: 10px; }
+  .summary-icon { width: 34px; height: 34px; }
+  .summary-card strong { font-size: 20px; }
+  .deployment-explorer { padding: 16px 14px; }
+  .explorer-heading { align-items: flex-start; }
+  .explorer-heading > span { max-width: 130px; text-align: right; }
+  .host-selector { display: flex; margin: 0 -14px; padding: 0 14px 3px; overflow-x: auto; scrollbar-width: none; }
+  .host-selector::-webkit-scrollbar, .type-selector::-webkit-scrollbar { display: none; }
+  .host-option { min-width: 220px; }
+  .type-selector { margin-right: -14px; padding-right: 14px; }
+  .service-panel-header { align-items: flex-start; min-height: 0; padding: 18px 16px; }
+  .service-panel-title { font-size: 19px; }
+  .service-panel-actions { width: 100%; margin-left: 0; }
+  .service-panel-actions .el-button { flex: 1; margin-left: 0; }
+  .service-panel { padding: 4px 14px 10px; }
+  .service-toolbar { flex-wrap: wrap; margin: 0; padding: 10px 0; }
+  .service-search { width: 100%; }
+  .status-filter { flex: 1; width: auto; }
+  .result-count { margin-left: 0; }
+  .service-list { display: flex; padding: 0; }
+  .service-item { display: grid; grid-template-columns: 40px minmax(0, 1fr); min-height: 0; gap: 12px; padding: 14px; }
+  .service-item-icon { width: 40px; height: 40px; }
+  .service-item-main { display: block; }
+  .service-item-title-row { flex-wrap: wrap; gap: 6px; }
+  .service-meta-grid { width: 100%; min-width: 0; margin-top: 12px; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
+  .service-item-error, .service-item-note { margin: 10px 0 0; }
+  .service-item-actions { grid-column: 1 / -1; width: 100%; padding: 12px 0 0; border-top: 1px solid #eef1f5; }
+  .service-item-actions .el-button, .service-item-actions .el-dropdown { flex: 1; }
+  .service-item-actions .el-dropdown .el-button { width: 100%; }
+  :deep(.el-dialog) { width: calc(100vw - 24px) !important; margin-top: 3vh !important; }
+  .detail-body { max-height: 68vh; }
+}
+
+@media (max-width: 480px) {
+  .summary-grid { grid-template-columns: 1fr; }
+  .summary-card { min-height: 58px; }
+  .summary-card > div:last-child { display: flex; flex: 1; align-items: center; justify-content: space-between; }
+  .summary-card span { margin: 0; }
+  .service-meta-grid { grid-template-columns: 1fr; }
+  .service-item-actions { flex-wrap: wrap; }
+  .service-item-actions .el-button, .service-item-actions .el-dropdown { min-width: calc(50% - 4px); }
 }
 
 .env-vars-editor :deep(textarea) {

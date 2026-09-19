@@ -10,7 +10,6 @@ import (
 	"github.com/docker/docker/api/types"
 	"github.com/gogu-x/ops/ops/host"
 	"github.com/gogu-x/ops/ops/internal/model"
-	"github.com/gogu-x/ops/ops/service"
 	"github.com/gogu-x/tree"
 )
 
@@ -95,26 +94,17 @@ func hostRequest(message interface{}) (interface{}, error) {
 	return tree.Request(pid, message).AwaitTimeout(20 * time.Second)
 }
 
-func serviceTypeRequest(message interface{}) (interface{}, error) {
-	pid, ok := tree.Lookup("ops-service")
-	if !ok {
-		return nil, errors.New("service actor is unavailable")
-	}
-	return tree.Request(pid, message).AwaitTimeout(20 * time.Second)
-}
-
 // resolveHostID looks up the Docker host backing a service instance via its
 // ServiceType.
-func resolveHostID(serviceTypeID string) (string, error) {
-	value, err := serviceTypeRequest(service.ListRequest{})
+func (a *Actor) resolveHostID(serviceTypeID string) (string, error) {
+	if a.serviceTypes == nil {
+		return "", errors.New("service type repository is unavailable")
+	}
+	items, err := a.serviceTypes.List(bgCtx())
 	if err != nil {
 		return "", err
 	}
-	result, ok := value.(service.ListResponse)
-	if !ok {
-		return "", errors.New("invalid service actor response")
-	}
-	for _, item := range result.ServiceTypes {
+	for _, item := range items {
 		if item.ID == serviceTypeID {
 			if strings.TrimSpace(item.HostID) == "" {
 				return "", ErrHostUnresolved
@@ -288,7 +278,7 @@ func (a *Actor) deploy(id string) (model.ServiceInstance, error) {
 	if err != nil {
 		return model.ServiceInstance{}, err
 	}
-	hostID, err := resolveHostID(item.ServiceTypeID)
+	hostID, err := a.resolveHostID(item.ServiceTypeID)
 	if err != nil {
 		return model.ServiceInstance{}, err
 	}
@@ -309,7 +299,7 @@ func (a *Actor) updateImage(id, newImage string) (model.ServiceInstance, error) 
 	if err != nil {
 		return model.ServiceInstance{}, err
 	}
-	hostID, err := resolveHostID(item.ServiceTypeID)
+	hostID, err := a.resolveHostID(item.ServiceTypeID)
 	if err != nil {
 		return model.ServiceInstance{}, err
 	}
@@ -372,7 +362,7 @@ func (a *Actor) containerAction(id, action string) error {
 	if err != nil {
 		return err
 	}
-	hostID, err := resolveHostID(item.ServiceTypeID)
+	hostID, err := a.resolveHostID(item.ServiceTypeID)
 	if err != nil {
 		return err
 	}
@@ -389,7 +379,7 @@ func (a *Actor) removeContainer(id string) error {
 	if err != nil {
 		return err
 	}
-	hostID, err := resolveHostID(item.ServiceTypeID)
+	hostID, err := a.resolveHostID(item.ServiceTypeID)
 	if err != nil {
 		return err
 	}
@@ -406,7 +396,7 @@ func (a *Actor) status(id string) (model.ServiceInstance, error) {
 	if err != nil {
 		return model.ServiceInstance{}, err
 	}
-	hostID, err := resolveHostID(item.ServiceTypeID)
+	hostID, err := a.resolveHostID(item.ServiceTypeID)
 	if err != nil {
 		item.Status = model.StatusUnknown
 		return item, nil
@@ -434,7 +424,7 @@ func (a *Actor) detail(id string) (ContainerDetail, error) {
 	if err != nil {
 		return ContainerDetail{}, err
 	}
-	hostID, err := resolveHostID(item.ServiceTypeID)
+	hostID, err := a.resolveHostID(item.ServiceTypeID)
 	if err != nil {
 		return ContainerDetail{}, err
 	}
@@ -532,7 +522,7 @@ func (a *Actor) logs(id, tail string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	hostID, err := resolveHostID(item.ServiceTypeID)
+	hostID, err := a.resolveHostID(item.ServiceTypeID)
 	if err != nil {
 		return "", err
 	}
@@ -572,14 +562,14 @@ func (a *Actor) lookupContainerID(hostID string, item model.ServiceInstance) (st
 
 // enrichList annotates a list of service instances with their live
 // container status, grouped by host to minimize Docker API calls.
-func enrichList(items []model.ServiceInstance) []model.ServiceInstance {
+func (a *Actor) enrichList(items []model.ServiceInstance) []model.ServiceInstance {
 	typeToHost := make(map[string]string)
 	hostContainers := make(map[string][]types.Container)
 	for i := range items {
 		item := &items[i]
 		hostID, ok := typeToHost[item.ServiceTypeID]
 		if !ok {
-			resolved, err := resolveHostID(item.ServiceTypeID)
+			resolved, err := a.resolveHostID(item.ServiceTypeID)
 			if err != nil {
 				item.Status = model.StatusUnknown
 				typeToHost[item.ServiceTypeID] = ""

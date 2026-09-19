@@ -3,15 +3,14 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
-	"github.com/gogu-x/ops/conf"
 	"github.com/gogu-x/ops/ops/internal/model"
+	"github.com/gogu-x/ops/ops/mongorpc"
 	"github.com/google/uuid"
 	"go.mongodb.org/mongo-driver/v2/bson"
-	"go.mongodb.org/mongo-driver/v2/mongo"
-	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 var ErrNotFound = errors.New("not found")
@@ -24,7 +23,6 @@ type Repository interface {
 	CountUsers(ctx context.Context) (int64, error)
 	SaveRefreshToken(ctx context.Context, token model.RefreshToken) error
 	ConsumeRefreshToken(ctx context.Context, tokenHash string, now time.Time) (model.RefreshToken, error)
-	Close(ctx context.Context) error
 }
 
 type MemoryRepository struct {
@@ -95,79 +93,57 @@ func (r *MemoryRepository) ConsumeRefreshToken(_ context.Context, tokenHash stri
 	return token, nil
 }
 
-func (r *MemoryRepository) Close(context.Context) error { return nil }
+type MongoRepository struct{ actor string }
 
-type MongoRepository struct {
-	client *mongo.Client
-	users  *mongo.Collection
-	tokens *mongo.Collection
-}
+func NewMongoRepository(actor string) *MongoRepository { return &MongoRepository{actor: actor} }
 
-func NewMongoRepository(ctx context.Context, cfg conf.Config) (*MongoRepository, error) {
-	clientOptions := options.Client().ApplyURI(cfg.MongoURI)
-	if cfg.MongoUsername != "" {
-		clientOptions.SetAuth(options.Credential{Username: cfg.MongoUsername, Password: cfg.MongoPassword})
-	}
-	client, err := mongo.Connect(clientOptions)
-	if err != nil {
-		return nil, err
-	}
-	if err := client.Ping(ctx, nil); err != nil {
-		_ = client.Disconnect(context.Background())
-		return nil, err
-	}
-	db := client.Database(cfg.MongoDatabase)
-	return &MongoRepository{client: client, users: db.Collection("users"), tokens: db.Collection("refresh_tokens")}, nil
-}
-
-func (r *MongoRepository) FindUser(ctx context.Context, username string) (model.User, error) {
+func (r *MongoRepository) FindUser(_ context.Context, username string) (model.User, error) {
 	var user model.User
-	err := r.users.FindOne(ctx, bson.M{"username": username}).Decode(&user)
-	if errors.Is(err, mongo.ErrNoDocuments) {
+	_, err := mongorpc.Request(r.actor, &mongorpc.FindOne{Collection: "users", Filter: bson.M{"username": username}, Result: &user})
+	if err != nil && strings.Contains(err.Error(), "no documents") {
 		return model.User{}, ErrNotFound
 	}
 	return user, err
 }
 
-func (r *MongoRepository) FindUserByID(ctx context.Context, id string) (model.User, error) {
+func (r *MongoRepository) FindUserByID(_ context.Context, id string) (model.User, error) {
 	var user model.User
-	err := r.users.FindOne(ctx, bson.M{"_id": id}).Decode(&user)
-	if errors.Is(err, mongo.ErrNoDocuments) {
+	_, err := mongorpc.Request(r.actor, &mongorpc.FindOne{Collection: "users", Filter: bson.M{"_id": id}, Result: &user})
+	if err != nil && strings.Contains(err.Error(), "no documents") {
 		return model.User{}, ErrNotFound
 	}
 	return user, err
 }
 
-func (r *MongoRepository) CreateUser(ctx context.Context, user model.User) error {
-	_, err := r.users.InsertOne(ctx, user)
-	if mongo.IsDuplicateKeyError(err) {
+func (r *MongoRepository) CreateUser(_ context.Context, user model.User) error {
+	_, err := mongorpc.Request(r.actor, &mongorpc.InsertOne{Collection: "users", Doc: user})
+	if err != nil && strings.Contains(err.Error(), "duplicate key") {
 		return ErrAlreadyExists
 	}
 	return err
 }
 
-func (r *MongoRepository) CountUsers(ctx context.Context) (int64, error) {
-	return r.users.CountDocuments(ctx, bson.M{})
+func (r *MongoRepository) CountUsers(context.Context) (int64, error) {
+	v, err := mongorpc.Request(r.actor, &mongorpc.Count{Collection: "users", Filter: bson.M{}})
+	if err != nil {
+		return 0, err
+	}
+	return v.(int64), nil
 }
 
-func (r *MongoRepository) SaveRefreshToken(ctx context.Context, token model.RefreshToken) error {
-	_, err := r.tokens.InsertOne(ctx, token)
+func (r *MongoRepository) SaveRefreshToken(_ context.Context, token model.RefreshToken) error {
+	_, err := mongorpc.Request(r.actor, &mongorpc.InsertOne{Collection: "refresh_tokens", Doc: token})
 	return err
 }
 
-func (r *MongoRepository) ConsumeRefreshToken(ctx context.Context, tokenHash string, now time.Time) (model.RefreshToken, error) {
+func (r *MongoRepository) ConsumeRefreshToken(_ context.Context, tokenHash string, now time.Time) (model.RefreshToken, error) {
 	var token model.RefreshToken
-	result := r.tokens.FindOneAndUpdate(ctx, bson.M{"token_hash": tokenHash, "revoked": false, "expires_at": bson.M{"$gt": now}}, bson.M{"$set": bson.M{"revoked": true}})
-	if err := result.Decode(&token); err != nil {
-		if errors.Is(err, mongo.ErrNoDocuments) {
-			return model.RefreshToken{}, ErrNotFound
-		}
-		return model.RefreshToken{}, err
+	_, err := mongorpc.Request(r.actor, &mongorpc.FindOneAndUpdate{Collection: "refresh_tokens", Filter: bson.M{"token_hash": tokenHash, "revoked": false, "expires_at": bson.M{"$gt": now}}, Update: bson.M{"$set": bson.M{"revoked": true}}, Result: &token})
+	if err != nil && strings.Contains(err.Error(), "no documents") {
+		return model.RefreshToken{}, ErrNotFound
 	}
-	return token, nil
+	return token, err
 }
-
-func (r *MongoRepository) Close(ctx context.Context) error { return r.client.Disconnect(ctx) }
 
 func NewUser(username, passwordHash, role string) model.User {
 	return model.User{ID: uuid.NewString(), Username: username, PasswordHash: passwordHash, Role: role, CreatedAt: time.Now().UTC()}

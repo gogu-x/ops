@@ -273,27 +273,19 @@ func newClient(host model.Host) (*client.Client, error) {
 }
 
 func newTLSHTTPClient(caPEM, certPEM, keyPEM string) (*http.Client, error) {
+	if strings.TrimSpace(caPEM) == "" || strings.TrimSpace(certPEM) == "" || strings.TrimSpace(keyPEM) == "" {
+		return nil, fmt.Errorf("TLS CA, client certificate, and client key are required")
+	}
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
-	if strings.TrimSpace(caPEM) == "" {
-		// User explicitly allowed empty certificate material. Keep TLS enabled,
-		// but do not verify the remote server certificate in this mode.
-		tlsConfig.InsecureSkipVerify = true //nolint:gosec // explicit optional verification mode
-	} else {
-		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM([]byte(caPEM)) {
-			return nil, fmt.Errorf("tls_ca does not contain a valid PEM certificate")
-		}
-		tlsConfig.RootCAs = pool
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM([]byte(caPEM)) {
+		return nil, fmt.Errorf("tls_ca does not contain a valid PEM certificate")
 	}
-	if strings.TrimSpace(certPEM) != "" || strings.TrimSpace(keyPEM) != "" {
-		if strings.TrimSpace(certPEM) == "" || strings.TrimSpace(keyPEM) == "" {
-			return nil, fmt.Errorf("tls_cert and tls_key must be provided together")
-		}
-		certificate, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM))
-		if err != nil {
-			return nil, fmt.Errorf("parse TLS client certificate/key: %w", err)
-		}
-		tlsConfig.Certificates = []tls.Certificate{certificate}
+	tlsConfig.RootCAs = pool
+	certificate, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM))
+	if err != nil {
+		return nil, fmt.Errorf("parse TLS client certificate/key: %w", err)
 	}
+	tlsConfig.Certificates = []tls.Certificate{certificate}
 	return &http.Client{Transport: &http.Transport{TLSClientConfig: tlsConfig}}, nil
 }

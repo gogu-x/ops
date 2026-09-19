@@ -4,13 +4,10 @@ import (
 	"context"
 	"log"
 	"os"
+	"time"
 
 	"github.com/gogu-x/ops/conf"
 	"github.com/gogu-x/ops/ops"
-	"github.com/gogu-x/ops/ops/host"
-	"github.com/gogu-x/ops/ops/instance"
-	"github.com/gogu-x/ops/ops/project"
-	"github.com/gogu-x/ops/ops/service"
 	"github.com/gogu-x/tree"
 	"github.com/urfave/cli/v3"
 )
@@ -35,7 +32,18 @@ func main() {
 			if c.IsSet("jwt-secret") {
 				cfg.JWTSecret = c.String("jwt-secret")
 			}
-			tree.Spawn(ops.NewPos(cfg), host.NewActor(cfg), project.NewActor(cfg), service.NewActor(cfg), instance.NewActor(cfg))
+			system, err := ops.NewSystem(ctx, cfg)
+			if err != nil {
+				return err
+			}
+			defer func() {
+				closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if err := system.Close(closeCtx); err != nil {
+					log.Printf("close application: %v", err)
+				}
+			}()
+			tree.Spawn(system.Actors...)
 			tree.Default().Start()
 			return nil
 		},

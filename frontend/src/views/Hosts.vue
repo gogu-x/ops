@@ -97,8 +97,9 @@ onMounted(loadHosts)
 
 <template>
   <AppLayout>
-    <div class="page-heading-actions-only">
-      <el-button v-if="canManage()" size="default" :icon="Plus" @click="openCreate">添加主机</el-button>
+    <div class="page-heading page-heading-modern">
+      <div><h2>基础设施</h2><p>管理 Docker 节点连接，快速确认主机可用性与运行环境。</p></div>
+      <el-button v-if="canManage()" type="primary" :icon="Plus" @click="openCreate">添加主机</el-button>
     </div>
 
     <el-card class="plain-card" shadow="never" v-loading="loading">
@@ -115,10 +116,10 @@ onMounted(loadHosts)
             <div v-if="row.note" class="host-item-note">{{ row.note }}</div>
           </div>
           <div class="host-item-actions">
-            <el-button link type="primary" size="small" :icon="Connection" :loading="testingId === row.id" @click="testHost(row)">
+            <el-button plain type="primary" :icon="Connection" :loading="testingId === row.id" @click="testHost(row)">
               测试连接
             </el-button>
-            <el-button v-if="canManage()" link type="danger" size="small" :icon="Delete" @click="removeHost(row)">删除</el-button>
+            <el-button v-if="canManage()" plain type="danger" :icon="Delete" @click="removeHost(row)">删除</el-button>
           </div>
         </div>
         <el-empty v-if="!loading && !hosts.length" description="暂无主机，请先添加主机" :image-size="60" />
@@ -165,20 +166,14 @@ onMounted(loadHosts)
 </template>
 
 <style scoped>
-.page-heading-actions-only {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: 12px;
-}
-
 .plain-card {
-  border-radius: 6px;
+  border-radius: 12px;
   border: 1px solid var(--ops-border);
-  box-shadow: none;
+  box-shadow: var(--ops-shadow);
 }
 
 .plain-card :deep(.el-card__body) {
-  padding: 4px 16px;
+  padding: 8px 20px;
 }
 
 .host-list {
@@ -189,8 +184,8 @@ onMounted(loadHosts)
 .host-item {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 12px 4px;
+  gap: 16px;
+  padding: 18px 4px;
   border-bottom: 1px solid var(--ops-border);
 }
 
@@ -200,11 +195,11 @@ onMounted(loadHosts)
 
 .host-item-icon {
   flex-shrink: 0;
-  width: 30px;
-  height: 30px;
-  border-radius: 6px;
-  background: var(--ops-bg);
-  color: var(--ops-text-secondary);
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: var(--ops-primary-light);
+  color: var(--ops-primary);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -219,25 +214,27 @@ onMounted(loadHosts)
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 .host-item-name {
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 16px;
+  font-weight: 700;
   color: var(--ops-text);
 }
 
 .host-item-note {
-  margin-top: 2px;
-  font-size: 12px;
+  margin-top: 7px;
+  font-size: 13px;
   color: var(--ops-text-secondary);
 }
 
 .host-item-actions {
   flex-shrink: 0;
   display: flex;
-  gap: 4px;
+  gap: 8px;
 }
+.host-item-actions .el-button { margin-left: 0; }
 
 .test-result {
   margin-top: 16px;
@@ -247,5 +244,17 @@ onMounted(loadHosts)
   font-size: 13px;
   color: var(--ops-text-secondary);
   font-weight: 500;
+}
+
+@media (max-width: 760px) {
+  .page-heading-modern { flex-direction: column; }
+  .page-heading-modern .el-button { width: 100%; }
+  .plain-card :deep(.el-card__body) { padding: 4px 14px; }
+  .host-item { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 12px; }
+  .host-item-actions { grid-column: 1 / -1; width: 100%; padding-top: 10px; border-top: 1px solid #eef1f5; }
+  .host-item-actions .el-button { flex: 1; }
+  .docker-host-text { width: 100%; margin-left: 0; overflow-wrap: anywhere; }
+  .test-result :deep(.el-descriptions__body) { overflow-x: auto; }
+  :deep(.el-dialog) { width: calc(100vw - 24px) !important; margin-top: 3vh !important; }
 }
 </style>
