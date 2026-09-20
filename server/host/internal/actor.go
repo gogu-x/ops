@@ -13,8 +13,9 @@ import (
 )
 
 type DockerService struct {
-	repo   Repository
-	docker *DockerManager
+	repo     Repository
+	docker   *DockerManager
+	handlers handlerRegistry
 }
 
 func NewDockerService(repositories ...Repository) *DockerService {
@@ -22,52 +23,14 @@ func NewDockerService(repositories ...Repository) *DockerService {
 	if len(repositories) > 0 && repositories[0] != nil {
 		repo = repositories[0]
 	}
-	return &DockerService{repo: repo, docker: NewDockerManager()}
+	service := &DockerService{repo: repo, docker: NewDockerManager()}
+	service.registerHandlers()
+	return service
 }
 
 func (a *DockerService) Name() string { return "ops-host" }
 
 func (a *DockerService) OnInit(_ tree.Context) {}
-
-func (a *DockerService) HandleMessage(ctx tree.Context, message interface{}) {
-	switch request := message.(type) {
-	case model.ListRequest:
-		hosts, err := a.repo.List(context.Background())
-		for i := range hosts {
-			hosts[i] = publicHost(hosts[i])
-		}
-		ctx.Response(model.HostListResponse{Hosts: hosts}, err)
-	case model.CreateRequest:
-		created, err := a.create(request.Host)
-		ctx.Response(publicHost(created), err)
-	case model.DeleteRequest:
-		err := a.delete(request.ID)
-		ctx.Response(nil, err)
-	case model.TestRequest:
-		result, err := a.test(request.ID)
-		ctx.Response(result, err)
-	case model.ContainerListRequest:
-		result, err := a.containerList(request.HostID)
-		ctx.Response(result, err)
-	case model.ContainerInspectRequest:
-		result, err := a.containerInspect(request.HostID, request.ContainerID)
-		ctx.Response(result, err)
-	case model.ContainerDeployRequest:
-		result, err := a.containerDeploy(request.HostID, request.Spec)
-		ctx.Response(result, err)
-	case model.ContainerActionRequest:
-		err := a.containerAction(request.HostID, request.ContainerID, request.Action)
-		ctx.Response(nil, err)
-	case model.ContainerLogsRequest:
-		result, err := a.containerLogs(request.HostID, request.ContainerID, request.Tail)
-		ctx.Response(result, err)
-	case model.ImagePullRequest:
-		err := a.imagePull(request.HostID, request.Image)
-		ctx.Response(nil, err)
-	default:
-		ctx.Response(nil, fmt.Errorf("unsupported host message %T", message))
-	}
-}
 
 func (a *DockerService) OnStop(_ tree.Context) {
 	_ = a.docker.Close()
