@@ -14,5 +14,5 @@ RUN apk add --no-cache ca-certificates tzdata \
     && adduser -S -G ops ops
 COPY --from=builder /ops /ops
 USER ops
-EXPOSE 8090
+EXPOSE 10001
 ENTRYPOINT ["/ops"]

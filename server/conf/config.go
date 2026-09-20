@@ -10,10 +10,10 @@ import (
 
 var (
 	// host（容器内需设为容器名或IP）
-	Addr = "5001"
+	Addr = "10001"
 
 	// MongoURL MongoDB 连接地址
-	MongoURL = "mongodb://43.160.212.55:27017"
+	MongoURL = "mongodb://127.0.0.1:27017"
 
 	// MongoUsername MongoDB 认证用户名
 	MongoUsername = ""
@@ -22,7 +22,7 @@ var (
 	MongoPassword = ""
 
 	// NatsURL NATS 连接地址
-	NatsURL = "nats://43.160.212.55:4222"
+	NatsURL = "nats://127.0.0.1:4222"
 
 	// JWTSecret JWT 签名密钥
 	JWTSecret = "jwt-secret"
