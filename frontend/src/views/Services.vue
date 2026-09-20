@@ -618,7 +618,7 @@ onUnmounted(stopStatusPolling)
 </script>
 
 <template>
-  <AppLayout>
+  <AppLayout fixed-viewport>
     <div class="services-page">
       <!-- 顶部面包屑 + 筛选 -->
       <div class="top-bar">
@@ -705,6 +705,7 @@ onUnmounted(stopStatusPolling)
             <el-table
               :data="filteredInstances"
               class="instance-table"
+              height="100%"
               highlight-current-row
               :current-row-key="activeInstanceId"
               row-key="id"
@@ -1001,9 +1002,11 @@ onUnmounted(stopStatusPolling)
 <style scoped>
 .services-page {
   display: flex;
+  flex: 1;
   flex-direction: column;
-  height: calc(100vh - 88px);
-  min-height: 560px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 /* -------- 顶部面包屑 + 筛选 -------- */
@@ -1158,7 +1161,9 @@ onUnmounted(stopStatusPolling)
   display: flex;
   flex: 1;
   min-width: 0;
+  min-height: 0;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .instance-toolbar {
@@ -1173,7 +1178,8 @@ onUnmounted(stopStatusPolling)
 .instance-toolbar-count { color: var(--ops-text-secondary); font-size: 12px; }
 .instance-search { width: 240px; margin-left: auto; }
 
-.instance-table { flex: 1; }
+.instance-table { flex: 1; min-height: 0; }
+.instance-table :deep(.el-scrollbar__bar.is-vertical) { display: none; }
 .instance-table :deep(.el-table__row) { cursor: pointer; }
 .instance-table :deep(.current-row td) { background: var(--ops-primary-light) !important; }
 .instance-name { font-weight: 600; color: var(--ops-text); }
@@ -1196,6 +1202,7 @@ onUnmounted(stopStatusPolling)
   width: 380px;
   flex: 0 0 380px;
   min-width: 0;
+  min-height: 0;
   border-left: 1px solid var(--ops-border);
   background: #fafcff;
 }
@@ -1336,13 +1343,13 @@ onUnmounted(stopStatusPolling)
 }
 
 @media (max-width: 1100px) {
-  .master-detail { flex-direction: column; overflow: visible; }
+  .master-detail { flex-direction: column; overflow: hidden; }
   .instance-panel:has(+ .detail-panel) { border-bottom: 1px solid var(--ops-border); }
   .detail-panel { width: 100%; flex: 1 1 auto; border-left: 0; border-top: 1px solid var(--ops-border); }
 }
 
 @media (max-width: 900px) {
-  .services-page { height: auto; min-height: 0; }
+  .services-page { min-height: 0; }
   .top-bar { flex-direction: column; align-items: stretch; gap: 10px; }
   .top-bar-actions { flex-wrap: wrap; margin-left: 0; }
   .top-bar-field .el-select { flex: 1; width: auto; }

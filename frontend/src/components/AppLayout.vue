@@ -17,6 +17,12 @@ import {
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '../stores/auth'
 
+const props = withDefaults(defineProps<{
+  fixedViewport?: boolean
+}>(), {
+  fixedViewport: false,
+})
+
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
@@ -65,7 +71,7 @@ async function logout() {
 </script>
 
 <template>
-  <el-container class="pro-shell">
+  <el-container class="pro-shell" :class="{ 'is-fixed-viewport': props.fixedViewport }">
     <el-aside :width="collapsed ? '64px' : '220px'" class="pro-sider">
       <div class="pro-logo">
         <el-icon class="pro-logo-img" :size="24"><Cloudy /></el-icon>
@@ -132,6 +138,31 @@ async function logout() {
 .pro-shell {
   min-height: 100vh;
   background: var(--ops-bg);
+}
+
+.pro-shell.is-fixed-viewport {
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.pro-shell.is-fixed-viewport .pro-body {
+  height: 100%;
+  min-height: 0;
+}
+
+.pro-shell.is-fixed-viewport .pro-main {
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.pro-shell.is-fixed-viewport .pro-page {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
 }
 
 .pro-sider {
