@@ -6,13 +6,13 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /ops ./server
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /ops ./
 
 FROM alpine:3.22
 RUN apk add --no-cache ca-certificates tzdata \
     && addgroup -S ops \
     && adduser -S -G ops ops
-#COPY --from=builder /out/ops /usr/local/bin/ops
+COPY --from=builder /ops /ops
 USER ops
 EXPOSE 8090
 ENTRYPOINT ["/ops"]

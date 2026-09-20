@@ -1,23 +1,6 @@
 name: ops
 
 services:
-  mongo:
-    image: mongo:8.0
-    restart: unless-stopped
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:-ops}
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?set MONGO_ROOT_PASSWORD in .env}
-    volumes:
-      - mongo-data:/data/db
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - mongosh --quiet --host 127.0.0.1 --username "$${MONGO_INITDB_ROOT_USERNAME}" --password "$${MONGO_INITDB_ROOT_PASSWORD}" --authenticationDatabase admin --eval "db.adminCommand('ping').ok" | grep 1
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 15s
-
   ops-backend:
     build:
       context: ./server
