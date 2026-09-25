@@ -10,7 +10,7 @@ import { environmentApi, type Environment, type EnvironmentForm } from '../api/e
 import { serviceApi, type ServiceType, type ServiceTypeForm } from '../api/services'
 import { hostApi, type Host } from '../api/hosts'
 import { projectApi, type Project } from '../api/projects'
-import { instanceApi, type ServiceInstance, type ServiceInstanceForm, type ContainerDetail } from '../api/instances'
+import { instanceApi, type ServiceInstance, type ServiceInstanceForm, type ContainerDetail, type RestartPolicy } from '../api/instances'
 import { eventApi, type InstanceEvent } from '../api/events'
 import AppLayout from '../components/AppLayout.vue'
 
@@ -235,8 +235,17 @@ async function removeType(type: ServiceType) {
 // -------- 实例表单 --------
 const instanceDialogVisible = ref(false)
 const editingInstanceId = ref('')
-const instanceForm = reactive<ServiceInstanceForm>({ service_type_id: '', host_id: '', name: '', image: '', params: [], env_text: '', network: '', port_mapping: '', note: '' })
+const instanceForm = reactive<ServiceInstanceForm>({ service_type_id: '', host_id: '', name: '', image: '', params: [], env_text: '', network: '', port_mapping: '', restart_policy: 'unless-stopped', note: '' })
 const instanceSubmitting = ref(false)
+const restartPolicyLabels: Record<RestartPolicy, string> = {
+  no: '不自动重启',
+  always: '总是重启',
+  'unless-stopped': '除非手动停止，否则重启',
+  'on-failure': '异常退出时重启',
+}
+function restartPolicyLabel(policy?: RestartPolicy): string {
+  return restartPolicyLabels[policy || 'unless-stopped']
+}
 function hostBelongsToProject(host: Host, projectId: string): boolean {
   return host.project_id === projectId || host.project_ids?.includes(projectId) === true
 }
@@ -261,6 +270,7 @@ function openCreateInstance() {
     env_text: activeProject.value?.env_vars || '',
     network: '',
     port_mapping: '',
+    restart_policy: 'unless-stopped',
     note: '',
   })
   instanceDialogVisible.value = true
@@ -277,6 +287,7 @@ function openEditInstance(item: ServiceInstance) {
     env_text: item.env_text || '',
     network: item.network || '',
     port_mapping: item.port_mapping || '',
+    restart_policy: item.restart_policy || 'unless-stopped',
     note: item.note,
   })
   instanceDialogVisible.value = true
@@ -531,6 +542,12 @@ async function loadLogs(instanceId: string) {
   }
 }
 
+function clearLogs() {
+  logsRequestId += 1
+  logsLoading.value = false
+  logsContent.value = ''
+}
+
 const activeInstanceId = ref('')
 const activeInstance = computed(() => instances.value.find((i) => i.id === activeInstanceId.value) || null)
 const detailTab = ref<'overview' | 'config' | 'events' | 'logs'>('overview')
@@ -779,6 +796,14 @@ onUnmounted(stopStatusPolling)
                   <div v-if="canManage" class="row-actions" @click.stop @dblclick.stop>
                     <el-button link type="primary" @click="openUpdateImage(row)">更新</el-button>
                     <el-button
+                      v-if="row.status === 'stopped'"
+                      link
+                      type="primary"
+                      :loading="actionLoadingId === row.id"
+                      @click="deployInstance(row)"
+                    >重新部署</el-button>
+                    <el-button
+                      v-else
                       link
                       type="primary"
                       :disabled="row.status !== 'running' && row.status !== 'restarting'"
@@ -817,6 +842,7 @@ onUnmounted(stopStatusPolling)
                 <div v-if="canManage" class="detail-header-actions">
                   <el-button v-if="activeInstance.status === 'not_deployed' || activeInstance.status === 'error'" size="small" type="primary" :icon="Upload" :loading="actionLoadingId === activeInstance.id" @click="deployInstance(activeInstance)">部署</el-button>
                   <el-button v-if="activeInstance.status === 'stopped'" size="small" type="success" plain :icon="VideoPlay" :loading="actionLoadingId === activeInstance.id" @click="startInstance(activeInstance)">启动</el-button>
+                  <el-button v-if="activeInstance.status === 'stopped'" size="small" type="primary" :icon="Upload" :loading="actionLoadingId === activeInstance.id" @click="deployInstance(activeInstance)">重新部署</el-button>
                   <el-button v-if="activeInstance.status === 'running' || activeInstance.status === 'restarting'" size="small" plain :icon="VideoPause" :loading="actionLoadingId === activeInstance.id" @click="stopInstance(activeInstance)">停止</el-button>
                   <el-button v-if="activeInstance.status === 'running'" size="small" plain :icon="RefreshRight" :loading="actionLoadingId === activeInstance.id" @click="restartInstance(activeInstance)">重启</el-button>
                   <el-dropdown trigger="click">
@@ -840,6 +866,7 @@ onUnmounted(stopStatusPolling)
                   <div class="detail-kv">
                     <div class="detail-kv-row"><span>镜像</span><span class="mono-text">{{ activeInstance.image }}</span></div>
                     <div class="detail-kv-row"><span>网络</span><span>{{ activeInstance.network || '默认网络' }}</span></div>
+                    <div class="detail-kv-row"><span>重启策略</span><span>{{ restartPolicyLabel(activeInstance.restart_policy) }}</span></div>
                     <div class="detail-kv-row"><span>端口</span><span class="mono-text">{{ activeInstance.port_mapping || '未映射' }}</span></div>
                     <div class="detail-kv-row"><span>创建时间</span><span>{{ formatDateTime(activeInstance.created_at) }}</span></div>
                   </div>
@@ -910,7 +937,10 @@ onUnmounted(stopStatusPolling)
                 <div class="detail-scroll detail-logs">
                   <div class="logs-toolbar">
                     <span class="detail-section-title">容器日志</span>
-                    <el-button size="small" plain :icon="Refresh" :loading="logsLoading" @click="loadLogs(activeInstance.id)">刷新</el-button>
+                    <div class="logs-toolbar-actions">
+                      <el-button size="small" plain :icon="Delete" title="仅清空当前显示，不删除容器日志" @click="clearLogs">清空</el-button>
+                      <el-button size="small" plain :icon="Refresh" :loading="logsLoading" @click="loadLogs(activeInstance.id)">刷新</el-button>
+                    </div>
                   </div>
                   <el-input
                     :model-value="logsContent"
@@ -994,6 +1024,15 @@ onUnmounted(stopStatusPolling)
         </el-form-item>
         <el-form-item label="镜像" required>
           <el-input v-model="instanceForm.image" placeholder="例如 gogs-game:v1001-3" />
+        </el-form-item>
+        <el-form-item label="重启策略">
+          <el-select v-model="instanceForm.restart_policy" style="width: 100%">
+            <el-option label="不自动重启" value="no" />
+            <el-option label="总是重启" value="always" />
+            <el-option label="除非手动停止，否则重启" value="unless-stopped" />
+            <el-option label="异常退出时重启" value="on-failure" />
+          </el-select>
+          <div class="form-hint">保存配置后重新部署容器生效。</div>
         </el-form-item>
         <el-form-item label="网络">
           <el-input v-model="instanceForm.network" placeholder="例如 bridge 或自定义网络名称，留空使用默认网络" />
@@ -1392,6 +1431,7 @@ onUnmounted(stopStatusPolling)
 }
 
 .logs-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.logs-toolbar-actions { display: flex; align-items: center; gap: 8px; }
 .logs-toolbar .detail-section-title { margin: 0; }
 .detail-scroll.detail-logs { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
 .logs-viewer-fill { display: flex; flex: 1 1 auto; min-height: 0; }

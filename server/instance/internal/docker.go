@@ -76,12 +76,13 @@ func buildContainerSpec(item model.ServiceInstance) model.ContainerSpec {
 	}
 
 	return model.ContainerSpec{
-		Name:        containerName(item),
-		Image:       item.Image,
-		Cmd:         cmd,
-		Env:         env,
-		Ports:       ports,
-		NetworkMode: strings.TrimSpace(item.Network),
+		Name:          containerName(item),
+		Image:         item.Image,
+		Cmd:           cmd,
+		Env:           env,
+		Ports:         ports,
+		NetworkMode:   strings.TrimSpace(item.Network),
+		RestartPolicy: model.NormalizeRestartPolicy(item.RestartPolicy),
 		Labels: map[string]string{
 			model.OpsInstanceLabel: item.ID,
 		},

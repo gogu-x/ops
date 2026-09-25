@@ -377,6 +377,7 @@ func (s *Service) CreateInstance(ctx context.Context, item model.ServiceInstance
 		return model.ServiceInstance{}, err
 	}
 	created := model.NewServiceInstance(item.ServiceTypeID, item.HostID, item.Name, item.Image, item.Note, item.EnvText, item.Network, item.PortMapping, item.Params)
+	created.RestartPolicy = model.NormalizeRestartPolicy(item.RestartPolicy)
 	if err := s.instances.Create(ctx, created); err != nil {
 		return model.ServiceInstance{}, err
 	}
@@ -400,6 +401,7 @@ func (s *Service) UpdateInstance(ctx context.Context, item model.ServiceInstance
 	}
 	item.CreatedAt = existing.CreatedAt
 	item.UpdatedAt = time.Now().UTC()
+	item.RestartPolicy = model.NormalizeRestartPolicy(item.RestartPolicy)
 	if err := s.instances.Update(ctx, item); err != nil {
 		return model.ServiceInstance{}, err
 	}

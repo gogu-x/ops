@@ -155,6 +155,7 @@ type ServiceInstance struct {
 	EnvText       string         `json:"env_text" bson:"env_text"`
 	Network       string         `json:"network" bson:"network"`           // Docker network name to attach the container to, e.g. "bridge" or a custom user-defined network
 	PortMapping   string         `json:"port_mapping" bson:"port_mapping"` // "host_port:container_port", e.g. "9001:9001"; container port defaults to host port if only one number is given
+	RestartPolicy string         `json:"restart_policy" bson:"restart_policy"`
 	Note          string         `json:"note" bson:"note"`
 	CreatedAt     time.Time      `json:"created_at" bson:"created_at"`
 	UpdatedAt     time.Time      `json:"updated_at" bson:"updated_at"`

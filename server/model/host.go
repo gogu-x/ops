@@ -54,6 +54,16 @@ const OpsInstanceLabel = "ops.instance_id"
 
 var instanceNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 
+const DefaultRestartPolicy = "unless-stopped"
+
+func NormalizeRestartPolicy(policy string) string {
+	policy = strings.TrimSpace(policy)
+	if policy == "" {
+		return DefaultRestartPolicy
+	}
+	return policy
+}
+
 // ValidateServiceInstance checks that a service instance's fields are
 // well-formed before it is persisted or deployed.
 func ValidateServiceInstance(item ServiceInstance) error {
@@ -68,6 +78,11 @@ func ValidateServiceInstance(item ServiceInstance) error {
 	}
 	if strings.TrimSpace(item.Image) == "" {
 		return errors.New("image is required")
+	}
+	switch NormalizeRestartPolicy(item.RestartPolicy) {
+	case "no", "always", "unless-stopped", "on-failure":
+	default:
+		return errors.New("restart_policy must be one of: no, always, unless-stopped, on-failure")
 	}
 	for index, param := range item.Params {
 		if !strings.HasPrefix(strings.TrimSpace(param.Flag), "--") {
@@ -121,5 +136,5 @@ func ParsePortMappingField(raw string) (PortMapping, bool) {
 // and creation/update timestamps.
 func NewServiceInstance(serviceTypeID, hostID, name, image, note, envText, network, portMapping string, params []ServiceParam) ServiceInstance {
 	now := time.Now().UTC()
-	return ServiceInstance{ID: uuid.NewString(), ServiceTypeID: serviceTypeID, HostID: hostID, Name: name, Image: image, Note: note, EnvText: envText, Network: network, PortMapping: portMapping, Params: params, CreatedAt: now, UpdatedAt: now}
+	return ServiceInstance{ID: uuid.NewString(), ServiceTypeID: serviceTypeID, HostID: hostID, Name: name, Image: image, Note: note, EnvText: envText, Network: network, PortMapping: portMapping, RestartPolicy: DefaultRestartPolicy, Params: params, CreatedAt: now, UpdatedAt: now}
 }

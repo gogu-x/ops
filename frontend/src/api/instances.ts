@@ -2,6 +2,7 @@ import api from './client'
 import type { ServiceParam } from './services'
 
 export type InstanceStatus = 'not_deployed' | 'running' | 'stopped' | 'restarting' | 'error' | 'unknown'
+export type RestartPolicy = 'no' | 'always' | 'unless-stopped' | 'on-failure'
 
 export interface ServiceInstance {
   id: string
@@ -13,6 +14,7 @@ export interface ServiceInstance {
   env_text: string
   network: string
   port_mapping: string
+  restart_policy: RestartPolicy
   note: string
   created_at?: string
   updated_at?: string
