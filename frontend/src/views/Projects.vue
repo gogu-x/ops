@@ -5,15 +5,18 @@ import { Plus, Edit, Delete, FolderOpened, Key } from '@element-plus/icons-vue'
 import { useAuthStore } from '../stores/auth'
 import { projectApi, type Project, type ProjectForm } from '../api/projects'
 import { serviceApi } from '../api/services'
+import { hostApi, type Host } from '../api/hosts'
 import AppLayout from '../components/AppLayout.vue'
 
 const auth = useAuthStore()
 const projects = ref<Project[]>([])
+const hosts = ref<Host[]>([])
 const serviceCountByProject = ref<Record<string, number>>({})
 const loading = ref(false)
 const submitting = ref(false)
 const dialogVisible = ref(false)
 const editingId = ref('')
+const selectedHostIDs = ref<string[]>([])
 
 const canManage = computed(() => auth.user?.role === 'admin')
 const form = reactive<ProjectForm>({ name: '', note: '', env_vars: '' })
@@ -21,8 +24,9 @@ const form = reactive<ProjectForm>({ name: '', note: '', env_vars: '' })
 async function loadAll() {
   loading.value = true
   try {
-    const [availableProjects, serviceTypes] = await Promise.all([projectApi.list(), serviceApi.list()])
+    const [availableProjects, serviceTypes, availableHosts] = await Promise.all([projectApi.list(), serviceApi.list(), hostApi.list()])
     projects.value = availableProjects
+    hosts.value = availableHosts
     const counts: Record<string, number> = {}
     for (const type of serviceTypes) {
       counts[type.project_id] = (counts[type.project_id] || 0) + 1
@@ -37,14 +41,31 @@ async function loadAll() {
 
 function openCreate() {
   editingId.value = ''
+  selectedHostIDs.value = []
   Object.assign(form, { name: '', note: '', env_vars: '' })
   dialogVisible.value = true
 }
 
 function openEdit(project: Project) {
   editingId.value = project.id
+  selectedHostIDs.value = projectHosts(project.id).map((host) => host.id)
   Object.assign(form, { name: project.name, note: project.note, env_vars: project.env_vars || '' })
   dialogVisible.value = true
+}
+
+const assignableHosts = computed(() => hosts.value)
+
+function hostHasProject(host: Host, projectId: string): boolean {
+  return host.project_id === projectId || host.project_ids?.includes(projectId) === true
+}
+
+function hostProjectNames(host: Host): string {
+  const ids = [...new Set([...(host.project_ids || []), host.project_id].filter(Boolean))]
+  return ids.map((id) => projects.value.find((project) => project.id === id)?.name || '其他项目').join('、')
+}
+
+function projectHosts(projectId: string): Host[] {
+  return hosts.value.filter((host) => hostHasProject(host, projectId))
 }
 
 async function save() {
@@ -53,15 +74,26 @@ async function save() {
     return
   }
   submitting.value = true
+  let projectSaved = false
   try {
     const payload = { name: form.name.trim(), note: form.note.trim(), env_vars: form.env_vars }
-    if (editingId.value) await projectApi.update(editingId.value, payload)
-    else await projectApi.create(payload)
+    if (editingId.value) {
+      await projectApi.update(editingId.value, payload)
+      projectSaved = true
+      await projectApi.updateHosts(editingId.value, selectedHostIDs.value)
+    } else {
+      await projectApi.create(payload)
+    }
     ElMessage.success(editingId.value ? '项目已更新' : '项目已创建')
     dialogVisible.value = false
     await loadAll()
   } catch (error: any) {
-    ElMessage.error(error?.response?.data?.error || '保存失败')
+    const reason = error?.response?.data?.error || '保存失败'
+    ElMessage.error(projectSaved ? `项目信息已保存，但主机绑定失败：${reason}` : reason)
+    if (projectSaved) {
+      await loadAll()
+      selectedHostIDs.value = projectHosts(editingId.value).map((host) => host.id)
+    }
   } finally {
     submitting.value = false
   }
@@ -108,8 +140,14 @@ onMounted(loadAll)
               <el-tag v-if="row.env_vars" size="small" type="success" effect="plain" round>
                 <el-icon style="vertical-align: -2px; margin-right: 2px"><Key /></el-icon>已配置环境变量
               </el-tag>
+              <el-tag size="small" :type="projectHosts(row.id).length ? 'success' : 'warning'" effect="plain" round>
+                {{ projectHosts(row.id).length ? `${projectHosts(row.id).length} 台部署主机` : '未绑定部署主机' }}
+              </el-tag>
             </div>
             <div v-if="row.note" class="project-item-note">{{ row.note }}</div>
+            <div v-if="projectHosts(row.id).length" class="project-host-names">
+              {{ projectHosts(row.id).map((host) => host.name).join('、') }}
+            </div>
           </div>
           <div v-if="canManage" class="project-item-actions">
             <el-button plain :icon="Edit" @click="openEdit(row)">编辑</el-button>
@@ -125,8 +163,18 @@ onMounted(loadAll)
         <el-form-item label="项目名称" required>
           <el-input v-model="form.name" placeholder="例如 主线游戏服、活动服" />
         </el-form-item>
+        <p v-if="!editingId" class="env-vars-hint">项目可以先独立创建，之后编辑时再绑定部署主机；未绑定主机的项目无法创建或部署服务实例。</p>
         <el-form-item label="备注">
           <el-input v-model="form.note" type="textarea" :rows="3" placeholder="可选，项目说明" />
+        </el-form-item>
+        <el-form-item v-if="editingId" label="部署主机">
+          <el-select v-model="selectedHostIDs" multiple collapse-tags collapse-tags-tooltip placeholder="可选，选择此项目可部署实例的主机" style="width: 100%">
+            <el-option v-for="host in assignableHosts" :key="host.id" :label="host.name" :value="host.id">
+              <span>{{ host.name }}</span>
+              <span class="host-option-detail">{{ host.docker_host }}{{ hostProjectNames(host) ? ` · 已绑定：${hostProjectNames(host)}` : '' }}</span>
+            </el-option>
+          </el-select>
+          <p class="env-vars-hint">同一主机可以绑定到多个项目。移除某项目的主机绑定前，该项目下仍部署在此主机上的服务实例需要先迁移或删除。</p>
         </el-form-item>
         <el-form-item label="环境变量">
           <el-input
@@ -220,6 +268,13 @@ onMounted(loadAll)
   font-size: 13px;
   line-height: 1.6;
   color: var(--ops-text-secondary);
+}
+
+.project-host-names {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--ops-text-secondary);
+  overflow-wrap: anywhere;
 }
 
 .project-item-actions {

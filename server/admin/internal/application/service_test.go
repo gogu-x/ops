@@ -84,10 +84,17 @@ func TestCreateServiceTypeStopsWhenEnvironmentDoesNotExist(t *testing.T) {
 
 func TestInstanceCRUDUsesRepository(t *testing.T) {
 	ctx := context.Background()
-	app, projects, environments, serviceTypes, _ := newTestService(requestFunc(func(string, interface{}) (interface{}, error) {
+	app, projects, environments, serviceTypes, _ := newTestService(requestFunc(func(actor string, message interface{}) (interface{}, error) {
+		if actor == "ops-host" {
+			return model.HostListResponse{Hosts: []model.Host{
+				{ID: "host-1", ProjectIDs: []string{"project-id", "another-project"}},
+				{ID: "host-2", ProjectIDs: []string{"another-project"}},
+			}}, nil
+		}
 		return model.ListResponse{}, nil
 	}))
 	projectItem := project.NewProject("project", "", "")
+	projectItem.ID = "project-id"
 	if err := projects.Create(ctx, projectItem); err != nil {
 		t.Fatal(err)
 	}
@@ -105,5 +112,49 @@ func TestInstanceCRUDUsesRepository(t *testing.T) {
 	}
 	if created.ID == "" {
 		t.Fatal("created instance has no ID")
+	}
+	if _, err := app.CreateInstance(ctx, model.ServiceInstance{ServiceTypeID: typeItem.ID, HostID: "host-2", Name: "game-2", Image: "game:v1"}); !errors.Is(err, model.ErrHostProjectConflict) {
+		t.Fatalf("expected host from another project to be rejected, got %v", err)
+	}
+}
+
+func TestSetProjectHostsAllowsSharingHostUsedByAnotherProject(t *testing.T) {
+	ctx := context.Background()
+	var binding model.SetProjectHostsRequest
+	app, projects, _, serviceTypes, instances := newTestService(requestFunc(func(actor string, message interface{}) (interface{}, error) {
+		if actor != "ops-host" {
+			return nil, errors.New("unexpected actor: " + actor)
+		}
+		switch request := message.(type) {
+		case model.ListRequest:
+			return model.HostListResponse{Hosts: []model.Host{{ID: "host-1", ProjectID: "project-1"}}}, nil
+		case model.SetProjectHostsRequest:
+			binding = request
+			return true, nil
+		default:
+			return nil, errors.New("unexpected host request")
+		}
+	}))
+	for _, id := range []string{"project-1", "project-2"} {
+		item := project.NewProject(id, "", "")
+		item.ID = id
+		if err := projects.Create(ctx, item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	typeItem := service.NewServiceType("project-1", "environment-1", "game")
+	if err := serviceTypes.Create(ctx, typeItem); err != nil {
+		t.Fatal(err)
+	}
+	usedInstance := model.NewServiceInstance(typeItem.ID, "host-1", "game-1", "game:v1", "", "", "", "", nil)
+	if err := instances.Create(ctx, usedInstance); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.SetProjectHosts(ctx, "project-2", []string{"host-1"}); err != nil {
+		t.Fatalf("binding a host already used by another project's service instance: %v", err)
+	}
+	if binding.ProjectID != "project-2" || len(binding.HostIDs) != 1 || binding.HostIDs[0] != "host-1" {
+		t.Fatalf("unexpected host binding request: %+v", binding)
 	}
 }

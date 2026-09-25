@@ -43,11 +43,13 @@ func (a *AdminService) createHost(c *gin.Context) {
 }
 
 func (a *AdminService) deleteHost(c *gin.Context) {
-	err := a.app.DeleteHost(c.Param("id"))
+	err := a.app.DeleteHost(c.Request.Context(), c.Param("id"))
 	if err != nil {
 		status := http.StatusBadRequest
 		if errors.Is(err, model.ErrNotFound) {
 			status = http.StatusNotFound
+		} else if errors.Is(err, model.ErrHostBound) || errors.Is(err, model.ErrHostInUse) {
+			status = http.StatusConflict
 		}
 		c.JSON(status, gin.H{"ok": false, "error": err.Error()})
 		return

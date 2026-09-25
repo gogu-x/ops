@@ -37,6 +37,10 @@ export const projectApi = {
     return response.data.data
   },
 
+  async updateHosts(id: string, hostIds: string[]): Promise<void> {
+    await api.put(`/projects/${encodeURIComponent(id)}/hosts`, { host_ids: hostIds })
+  },
+
   async remove(id: string): Promise<void> {
     await api.delete(`/projects/${encodeURIComponent(id)}`)
   },

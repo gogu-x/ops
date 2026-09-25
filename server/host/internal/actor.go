@@ -52,6 +52,8 @@ func (a *DockerService) create(host model.Host) (model.Host, error) {
 	}
 	created := NewHost(host.Name, host.DockerHost, host.TLSCA, host.TLSCert, host.TLSKey, host.Note)
 	host.ID = created.ID
+	host.ProjectID = ""
+	host.ProjectIDs = nil
 	host.CreatedAt = created.CreatedAt
 	host.UpdatedAt = created.UpdatedAt
 	if err := a.repo.Create(context.Background(), host); err != nil {
@@ -65,6 +67,13 @@ func (a *DockerService) delete(id string) error {
 		return err
 	}
 	return a.repo.Delete(context.Background(), id)
+}
+
+func (a *DockerService) setProjectHosts(projectID string, hostIDs []string) error {
+	if strings.TrimSpace(projectID) == "" {
+		return errors.New("project_id is required")
+	}
+	return a.repo.SetProjectHosts(context.Background(), strings.TrimSpace(projectID), hostIDs)
 }
 
 func (a *DockerService) test(id string) (model.TestResponse, error) {

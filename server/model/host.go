@@ -17,9 +17,13 @@ import (
 // internal package, which Go's visibility rules forbid across sibling
 // module trees.
 var (
-	ErrNotFound       = errors.New("not found")
-	ErrAlreadyExists  = errors.New("already exists")
-	ErrHostUnresolved = errors.New("unable to resolve host for service instance")
+	ErrNotFound             = errors.New("not found")
+	ErrAlreadyExists        = errors.New("already exists")
+	ErrHostUnresolved       = errors.New("unable to resolve host for service instance")
+	ErrHostProjectConflict  = errors.New("host is not bound to this project")
+	ErrHostInUse            = errors.New("host is used by service instances")
+	ErrHostBound            = errors.New("host is still bound to a project")
+	ErrProjectHasBoundHosts = errors.New("project has bound hosts")
 )
 
 // PortMapping describes a single container port published to the host,

@@ -19,6 +19,7 @@ func (a *DockerService) registerHandlers() {
 	registerHandler(a.handlers, a.handleList)
 	registerHandler(a.handlers, a.handleCreate)
 	registerHandler(a.handlers, a.handleDelete)
+	registerHandler(a.handlers, a.handleSetProjectHosts)
 	registerHandler(a.handlers, a.handleTest)
 	registerHandler(a.handlers, a.handleContainerList)
 	registerHandler(a.handlers, a.handleContainerInspect)
@@ -64,6 +65,11 @@ func (a *DockerService) handleCreate(ctx tree.Context, request model.CreateReque
 
 func (a *DockerService) handleDelete(ctx tree.Context, request model.DeleteRequest) {
 	err := a.delete(request.ID)
+	ctx.Response(nil, err)
+}
+
+func (a *DockerService) handleSetProjectHosts(ctx tree.Context, request model.SetProjectHostsRequest) {
+	err := a.setProjectHosts(request.ProjectID, request.HostIDs)
 	ctx.Response(nil, err)
 }
 

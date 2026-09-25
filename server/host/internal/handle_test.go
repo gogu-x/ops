@@ -13,6 +13,7 @@ func TestHostHandlersRegistered(t *testing.T) {
 		model.ListRequest{},
 		model.CreateRequest{},
 		model.DeleteRequest{},
+		model.SetProjectHostsRequest{},
 		model.TestRequest{},
 		model.ContainerListRequest{},
 		model.ContainerInspectRequest{},

@@ -10,6 +10,10 @@ type ListRequest struct{}
 type CreateRequest struct{ Host Host }
 type DeleteRequest struct{ ID string }
 type TestRequest struct{ ID string }
+type SetProjectHostsRequest struct {
+	ProjectID string
+	HostIDs   []string
+}
 type HostListResponse struct{ Hosts []Host }
 type TestResponse struct {
 	Host   Host              `json:"host"`

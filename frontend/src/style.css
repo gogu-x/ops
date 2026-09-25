@@ -30,6 +30,38 @@ body {
   background: var(--ops-bg);
 }
 
+/* Keep every dialog near the top of the viewport and scroll long forms inside
+   the dialog so the title and action buttons remain reachable on small screens. */
+.el-overlay-dialog {
+  overflow-y: auto;
+}
+
+.el-dialog {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 8vh - 24px);
+  margin: 6vh auto 18px !important;
+  overflow: hidden;
+}
+
+.el-dialog__header,
+.el-dialog__footer {
+  flex: 0 0 auto;
+}
+
+.el-dialog__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+@supports (height: 100dvh) {
+  .el-dialog {
+    max-height: calc(100dvh - 8dvh - 24px);
+  }
+}
+
 /* ---------- Auth / Login ---------- */
 .auth-page {
   min-height: 100vh;
@@ -263,6 +295,18 @@ body {
 }
 
 @media (max-width: 760px) {
+  .el-dialog {
+    width: calc(100vw - 24px) !important;
+    max-height: calc(100vh - 24px);
+    margin: 12px auto !important;
+  }
+
+  @supports (height: 100dvh) {
+    .el-dialog {
+      max-height: calc(100dvh - 24px);
+    }
+  }
+
   .page-heading { flex-direction: column; margin-bottom: 14px; }
   .page-heading h2 { font-size: 19px; }
   .auth-page { padding: 24px 0; }

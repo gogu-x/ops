@@ -2,7 +2,11 @@ import api from './client'
 
 export interface Host {
   id: string
+  project_id: string
+  project_ids?: string[]
   name: string
+  internal_ip: string
+  external_ip: string
   docker_host: string
   tls_ca: string
   tls_cert: string
@@ -14,23 +18,13 @@ export interface Host {
 
 export interface HostForm {
   name: string
+  internal_ip: string
+  external_ip: string
   docker_host: string
   tls_ca: string
   tls_cert: string
   tls_key: string
   note: string
-}
-
-export interface DockerInfo {
-  version: string
-  api_version: string
-  os: string
-  arch: string
-}
-
-export interface HostTestResult {
-  host: Host
-  docker: DockerInfo
 }
 
 interface ApiResponse<T> {
@@ -54,8 +48,7 @@ export const hostApi = {
     await api.delete(`/hosts/${encodeURIComponent(id)}`)
   },
 
-  async test(id: string): Promise<HostTestResult> {
-    const response = await api.post<ApiResponse<HostTestResult>>(`/hosts/${encodeURIComponent(id)}/test`)
-    return response.data.data
+  async test(id: string): Promise<void> {
+    await api.post<ApiResponse<unknown>>(`/hosts/${encodeURIComponent(id)}/test`)
   },
 }

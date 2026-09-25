@@ -88,7 +88,7 @@ func (a *AdminService) deleteServiceInstance(c *gin.Context) {
 }
 
 func (a *AdminService) deployServiceInstance(c *gin.Context) {
-	result, err := a.app.DeployInstance(c.Param("id"))
+	result, err := a.app.DeployInstance(c.Request.Context(), c.Param("id"))
 	if err != nil {
 		writeInstanceGatewayError(c, err)
 		return
@@ -104,7 +104,7 @@ func (a *AdminService) updateServiceInstanceImage(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "invalid request: image is required"})
 		return
 	}
-	result, err := a.app.UpdateInstanceImage(c.Param("id"), req.Image)
+	result, err := a.app.UpdateInstanceImage(c.Request.Context(), c.Param("id"), req.Image)
 	if err != nil {
 		writeInstanceGatewayError(c, err)
 		return
@@ -116,7 +116,7 @@ func writeInstanceGatewayError(c *gin.Context, err error) {
 	status := http.StatusBadGateway
 	if errors.Is(err, model.ErrNotFound) {
 		status = http.StatusNotFound
-	} else if errors.Is(err, model.ErrHostUnresolved) {
+	} else if errors.Is(err, model.ErrHostUnresolved) || errors.Is(err, model.ErrHostProjectConflict) {
 		status = http.StatusBadRequest
 	}
 	c.JSON(status, gin.H{"ok": false, "error": err.Error()})

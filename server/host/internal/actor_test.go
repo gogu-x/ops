@@ -41,3 +41,43 @@ func TestHostTLSValidation(t *testing.T) {
 		t.Fatal("expected port validation error")
 	}
 }
+
+func TestProjectHostBindingsAllowMultipleProjects(t *testing.T) {
+	a := NewDockerService()
+	host1, err := a.create(tlsHost("docker-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	host2, err := a.create(tlsHost("docker-2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := a.setProjectHosts("project-1", []string{host1.ID, host2.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.setProjectHosts("project-2", []string{host1.ID}); err != nil {
+		t.Fatalf("expected a host to be shared across projects, got %v", err)
+	}
+
+	bound, err := a.repo.Get(context.Background(), host1.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bound.HasProject("project-1") || !bound.HasProject("project-2") {
+		t.Fatalf("host project bindings = %#v, want both projects", bound.ProjectIDs)
+	}
+	if err := a.setProjectHosts("project-1", []string{host2.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.setProjectHosts("project-1", nil); err != nil {
+		t.Fatal(err)
+	}
+	bound, err = a.repo.Get(context.Background(), host1.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bound.HasProject("project-1") || !bound.HasProject("project-2") {
+		t.Fatalf("updating one project's bindings must preserve other project memberships: %#v", bound.ProjectIDs)
+	}
+}

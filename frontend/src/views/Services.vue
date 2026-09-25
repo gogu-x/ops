@@ -237,13 +237,24 @@ const instanceDialogVisible = ref(false)
 const editingInstanceId = ref('')
 const instanceForm = reactive<ServiceInstanceForm>({ service_type_id: '', host_id: '', name: '', image: '', params: [], env_text: '', network: '', port_mapping: '', note: '' })
 const instanceSubmitting = ref(false)
+function hostBelongsToProject(host: Host, projectId: string): boolean {
+  return host.project_id === projectId || host.project_ids?.includes(projectId) === true
+}
+
+const hostById = computed(() => new Map(hosts.value.map((host) => [host.id, host])))
+
+const instanceHostOptions = computed(() => {
+  const serviceType = types.value.find((item) => item.id === instanceForm.service_type_id)
+  if (!serviceType) return []
+  return hosts.value.filter((host) => hostBelongsToProject(host, serviceType.project_id))
+})
 
 function openCreateInstance() {
   if (!activeType.value) return
   editingInstanceId.value = ''
   Object.assign(instanceForm, {
     service_type_id: activeType.value.id,
-    host_id: hosts.value[0]?.id || '',
+    host_id: hosts.value.find((host) => hostBelongsToProject(host, activeType.value!.project_id))?.id || '',
     name: '',
     image: '',
     params: [],
@@ -496,30 +507,42 @@ function stopStatusPolling() {
   }
 }
 
-// -------- 日志查看 --------
-const logsDialogVisible = ref(false)
+// -------- 实例详情抽屉：概览/配置/事件/日志 --------
+const detailVisible = ref(false)
 const logsLoading = ref(false)
 const logsContent = ref('')
-const logsTargetName = ref('')
+let logsRequestId = 0
 
-async function viewLogs(row: ServiceInstance) {
-  logsTargetName.value = row.name
-  logsDialogVisible.value = true
+async function loadLogs(instanceId: string) {
+  const requestId = ++logsRequestId
   logsLoading.value = true
   logsContent.value = ''
   try {
-    logsContent.value = await instanceApi.logs(row.id, 500)
+    const content = await instanceApi.logs(instanceId, 500)
+    if (requestId === logsRequestId && activeInstanceId.value === instanceId && detailTab.value === 'logs') {
+      logsContent.value = content
+    }
   } catch (error: any) {
-    logsContent.value = error?.response?.data?.error || '日志获取失败'
+    if (requestId === logsRequestId && activeInstanceId.value === instanceId && detailTab.value === 'logs') {
+      logsContent.value = error?.response?.data?.error || '日志获取失败'
+    }
   } finally {
-    logsLoading.value = false
+    if (requestId === logsRequestId) logsLoading.value = false
   }
 }
 
-// -------- 右侧详情面板：选中实例 + 概览/配置/事件 --------
 const activeInstanceId = ref('')
 const activeInstance = computed(() => instances.value.find((i) => i.id === activeInstanceId.value) || null)
-const detailTab = ref<'overview' | 'config' | 'events'>('overview')
+const detailTab = ref<'overview' | 'config' | 'events' | 'logs'>('overview')
+
+function openInstanceDetails(row: ServiceInstance) {
+  activeInstanceId.value = row.id
+  detailVisible.value = true
+}
+
+function onDetailDrawerClosed() {
+  activeInstanceId.value = ''
+}
 
 const detailData = ref<ContainerDetail | null>(null)
 const detailLoading = ref(false)
@@ -598,10 +621,20 @@ watch(activeInstanceId, (id) => {
   detailTab.value = 'overview'
   detailData.value = null
   events.value = []
-  if (!id) return
+  logsContent.value = ''
+  logsLoading.value = false
+  logsRequestId++
+  if (!id) {
+    detailVisible.value = false
+    return
+  }
   const item = instances.value.find((i) => i.id === id)
   if (item && item.status !== 'not_deployed') loadDetail(id)
   loadEvents(id)
+})
+
+watch([activeInstanceId, detailTab], ([id, tab]) => {
+  if (id && tab === 'logs') void loadLogs(id)
 })
 
 onMounted(() => {
@@ -709,7 +742,7 @@ onUnmounted(stopStatusPolling)
               highlight-current-row
               :current-row-key="activeInstanceId"
               row-key="id"
-              @row-dblclick="(row: ServiceInstance) => (activeInstanceId = row.id)"
+              @row-click="openInstanceDetails"
             >
               <el-table-column label="实例" min-width="140">
                 <template #default="{ row }">
@@ -724,6 +757,14 @@ onUnmounted(stopStatusPolling)
               <el-table-column label="镜像" min-width="200">
                 <template #default="{ row }"><span class="mono-text">{{ row.image }}</span></template>
               </el-table-column>
+              <el-table-column label="主机 IP" min-width="176">
+                <template #default="{ row }">
+                  <div class="instance-host-ips">
+                    <span><i>内网</i>{{ hostById.get(row.host_id)?.internal_ip || '—' }}</span>
+                    <span><i>外网</i>{{ hostById.get(row.host_id)?.external_ip || '—' }}</span>
+                  </div>
+                </template>
+              </el-table-column>
               <el-table-column label="网络" width="120">
                 <template #default="{ row }">{{ row.network || '默认网络' }}</template>
               </el-table-column>
@@ -735,27 +776,15 @@ onUnmounted(stopStatusPolling)
               </el-table-column>
               <el-table-column label="操作" width="150" fixed="right">
                 <template #default="{ row }">
-                  <div class="row-actions" @click.stop>
-                    <el-link v-if="row.status !== 'not_deployed'" type="primary" :underline="false" @click="viewLogs(row)">日志</el-link>
-                    <el-link
-                      v-if="canManage && (row.status === 'running' || row.status === 'restarting')"
+                  <div v-if="canManage" class="row-actions" @click.stop @dblclick.stop>
+                    <el-button link type="primary" @click="openUpdateImage(row)">更新</el-button>
+                    <el-button
+                      link
                       type="primary"
-                      :underline="false"
+                      :disabled="row.status !== 'running' && row.status !== 'restarting'"
+                      :loading="actionLoadingId === row.id"
                       @click="restartInstance(row)"
-                    >重启</el-link>
-                    <el-dropdown v-if="canManage" trigger="click">
-                      <el-icon class="row-more"><MoreFilled /></el-icon>
-                      <template #dropdown>
-                        <el-dropdown-menu>
-                          <el-dropdown-item v-if="row.status === 'not_deployed' || row.status === 'error'" :icon="Upload" @click="deployInstance(row)">部署</el-dropdown-item>
-                          <el-dropdown-item v-if="row.status === 'stopped'" :icon="VideoPlay" @click="startInstance(row)">启动</el-dropdown-item>
-                          <el-dropdown-item v-if="row.status === 'running' || row.status === 'restarting'" :icon="VideoPause" @click="stopInstance(row)">停止</el-dropdown-item>
-                          <el-dropdown-item :icon="Refresh" @click="openUpdateImage(row)">更新镜像</el-dropdown-item>
-                          <el-dropdown-item :icon="Edit" divided @click="openEditInstance(row)">编辑配置</el-dropdown-item>
-                          <el-dropdown-item :icon="Delete" class="danger-menu-item" @click="removeInstance(row)">删除实例</el-dropdown-item>
-                        </el-dropdown-menu>
-                      </template>
-                    </el-dropdown>
+                    >重启</el-button>
                   </div>
                 </template>
               </el-table-column>
@@ -767,34 +796,44 @@ onUnmounted(stopStatusPolling)
             />
           </section>
 
-          <!-- 右侧详情面板 -->
-          <aside v-if="activeInstance" class="detail-panel">
-            <div class="detail-header">
-              <div class="detail-header-icon" :class="`status-${activeInstance.status}`"><el-icon :size="20"><Box /></el-icon></div>
-              <div class="detail-header-info">
-                <div class="detail-header-name">{{ activeInstance.name }}</div>
+          <!-- 实例详情抽屉，与主机详情使用相同的右侧抽屉交互 -->
+          <el-drawer
+            v-model="detailVisible"
+            direction="rtl"
+            size="520px"
+            :with-header="false"
+            @closed="onDetailDrawerClosed"
+          >
+            <div v-if="activeInstance" class="detail-panel">
+              <div class="detail-header">
+                <div class="detail-header-main">
+                  <div class="detail-header-icon" :class="`status-${activeInstance.status}`"><el-icon :size="20"><Box /></el-icon></div>
+                  <div class="detail-header-info">
+                    <div class="detail-title">实例详情</div>
+                    <div class="detail-header-name">{{ activeInstance.name }}</div>
+                  </div>
+                  <el-button class="detail-close-button" circle :icon="Close" aria-label="关闭实例详情" @click="detailVisible = false" />
+                </div>
+                <div v-if="canManage" class="detail-header-actions">
+                  <el-button v-if="activeInstance.status === 'not_deployed' || activeInstance.status === 'error'" size="small" type="primary" :icon="Upload" :loading="actionLoadingId === activeInstance.id" @click="deployInstance(activeInstance)">部署</el-button>
+                  <el-button v-if="activeInstance.status === 'stopped'" size="small" type="success" plain :icon="VideoPlay" :loading="actionLoadingId === activeInstance.id" @click="startInstance(activeInstance)">启动</el-button>
+                  <el-button v-if="activeInstance.status === 'running' || activeInstance.status === 'restarting'" size="small" plain :icon="VideoPause" :loading="actionLoadingId === activeInstance.id" @click="stopInstance(activeInstance)">停止</el-button>
+                  <el-button v-if="activeInstance.status === 'running'" size="small" plain :icon="RefreshRight" :loading="actionLoadingId === activeInstance.id" @click="restartInstance(activeInstance)">重启</el-button>
+                  <el-dropdown trigger="click">
+                    <el-button size="small" plain :icon="MoreFilled">更多</el-button>
+                    <template #dropdown>
+                      <el-dropdown-menu>
+                        <el-dropdown-item :icon="Refresh" @click="openUpdateImage(activeInstance)">更新镜像</el-dropdown-item>
+                        <el-dropdown-item :icon="Edit" @click="openEditInstance(activeInstance)">编辑配置</el-dropdown-item>
+                        <el-dropdown-item v-if="activeInstance.status !== 'not_deployed'" :icon="Delete" @click="removeInstanceContainer(activeInstance)">移除容器</el-dropdown-item>
+                        <el-dropdown-item :icon="Delete" divided class="danger-menu-item" @click="removeInstance(activeInstance)">删除实例</el-dropdown-item>
+                      </el-dropdown-menu>
+                    </template>
+                  </el-dropdown>
+                </div>
               </div>
-              <el-icon class="detail-close" @click="activeInstanceId = ''"><Close /></el-icon>
-              <div v-if="canManage" class="detail-header-actions">
-                <el-button v-if="activeInstance.status === 'not_deployed' || activeInstance.status === 'error'" size="small" type="primary" :icon="Upload" :loading="actionLoadingId === activeInstance.id" @click="deployInstance(activeInstance)">部署</el-button>
-                <el-button v-if="activeInstance.status === 'stopped'" size="small" type="success" plain :icon="VideoPlay" :loading="actionLoadingId === activeInstance.id" @click="startInstance(activeInstance)">启动</el-button>
-                <el-button v-if="activeInstance.status === 'running' || activeInstance.status === 'restarting'" size="small" plain :icon="VideoPause" :loading="actionLoadingId === activeInstance.id" @click="stopInstance(activeInstance)">停止</el-button>
-                <el-button v-if="activeInstance.status === 'running'" size="small" plain :icon="RefreshRight" :loading="actionLoadingId === activeInstance.id" @click="restartInstance(activeInstance)">重启</el-button>
-                <el-dropdown trigger="click">
-                  <el-button size="small" plain :icon="MoreFilled">更多</el-button>
-                  <template #dropdown>
-                    <el-dropdown-menu>
-                      <el-dropdown-item :icon="Refresh" @click="openUpdateImage(activeInstance)">更新镜像</el-dropdown-item>
-                      <el-dropdown-item :icon="Edit" @click="openEditInstance(activeInstance)">编辑配置</el-dropdown-item>
-                      <el-dropdown-item v-if="activeInstance.status !== 'not_deployed'" :icon="Delete" @click="removeInstanceContainer(activeInstance)">移除容器</el-dropdown-item>
-                      <el-dropdown-item :icon="Delete" divided class="danger-menu-item" @click="removeInstance(activeInstance)">删除实例</el-dropdown-item>
-                    </el-dropdown-menu>
-                  </template>
-                </el-dropdown>
-              </div>
-            </div>
 
-            <el-tabs v-model="detailTab" class="detail-tabs">
+              <el-tabs v-model="detailTab" class="detail-tabs">
               <el-tab-pane label="概览" name="overview">
                 <div class="detail-scroll">
                   <div class="detail-section-title">实例信息</div>
@@ -866,8 +905,26 @@ onUnmounted(stopStatusPolling)
                   </div>
                 </div>
               </el-tab-pane>
-            </el-tabs>
-          </aside>
+
+              <el-tab-pane v-if="activeInstance.status !== 'not_deployed'" label="日志" name="logs">
+                <div class="detail-scroll detail-logs">
+                  <div class="logs-toolbar">
+                    <span class="detail-section-title">容器日志</span>
+                    <el-button size="small" plain :icon="Refresh" :loading="logsLoading" @click="loadLogs(activeInstance.id)">刷新</el-button>
+                  </div>
+                  <el-input
+                    :model-value="logsContent"
+                    type="textarea"
+                    readonly
+                    resize="none"
+                    class="logs-viewer logs-viewer-fill"
+                    :placeholder="logsLoading ? '加载中...' : '暂无日志'"
+                  />
+                </div>
+              </el-tab-pane>
+              </el-tabs>
+            </div>
+          </el-drawer>
         </div>
       </template>
     </div>
@@ -923,11 +980,14 @@ onUnmounted(stopStatusPolling)
       <el-form label-width="90px">
         <el-form-item label="部署主机" required>
           <el-select v-model="instanceForm.host_id" placeholder="请选择 Docker 主机" style="width: 100%">
-            <el-option v-for="host in hosts" :key="host.id" :label="host.name" :value="host.id">
+            <el-option v-for="host in instanceHostOptions" :key="host.id" :label="host.name" :value="host.id">
               <span>{{ host.name }}</span>
               <span class="host-option-detail">{{ host.docker_host }}</span>
             </el-option>
           </el-select>
+          <div v-if="!instanceHostOptions.length" class="form-hint">
+            当前项目还没有绑定部署主机。请先到“项目管理”中编辑项目并绑定主机。
+          </div>
         </el-form-item>
         <el-form-item label="实例名称" required>
           <el-input v-model="instanceForm.name" placeholder="例如 game-1、game-2" />
@@ -982,20 +1042,6 @@ onUnmounted(stopStatusPolling)
       </template>
     </el-dialog>
 
-    <!-- 日志查看 -->
-    <el-dialog v-model="logsDialogVisible" :title="`容器日志 - ${logsTargetName}`" width="760px" destroy-on-close>
-      <el-input
-        :model-value="logsContent"
-        type="textarea"
-        :rows="20"
-        readonly
-        class="logs-viewer"
-        :placeholder="logsLoading ? '加载中...' : '暂无日志'"
-      />
-      <template #footer>
-        <el-button @click="logsDialogVisible = false">关闭</el-button>
-      </template>
-    </el-dialog>
   </AppLayout>
 </template>
 
@@ -1182,8 +1228,12 @@ onUnmounted(stopStatusPolling)
 .instance-table :deep(.el-scrollbar__bar.is-vertical) { display: none; }
 .instance-table :deep(.el-table__row) { cursor: pointer; }
 .instance-table :deep(.current-row td) { background: var(--ops-primary-light) !important; }
+.instance-table :deep(.el-table__row) { cursor: pointer; }
 .instance-name { font-weight: 600; color: var(--ops-text); }
 .mono-text { font-family: "SFMono-Regular", Consolas, Monaco, monospace; font-size: 12.5px; color: #52657a; }
+.instance-host-ips { display: flex; flex-direction: column; gap: 2px; color: #52657a; font-size: 12px; line-height: 1.35; }
+.instance-host-ips span { overflow-wrap: anywhere; }
+.instance-host-ips i { display: inline-block; width: 32px; color: var(--ops-text-secondary); font-size: 11px; font-style: normal; }
 
 .status-dot-label { display: inline-flex; align-items: center; gap: 6px; line-height: 1; }
 .status-dot { display: inline-block; width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: #c0c4cc; }
@@ -1192,29 +1242,34 @@ onUnmounted(stopStatusPolling)
 .status-dot.status-stopped, .status-dot.status-restarting { background: #e6a23c; }
 
 .row-actions { display: flex; align-items: center; gap: 10px; }
+.row-actions .el-button { margin-left: 0; padding: 0 2px; }
 .row-more { cursor: pointer; color: var(--ops-text-secondary); font-size: 16px; }
 .row-more:hover { color: var(--ops-primary); }
 
-/* -------- 右侧详情面板 -------- */
+/* -------- 实例详情抽屉 -------- */
+:deep(.el-drawer__body) { padding: 0; overflow: hidden; }
+
 .detail-panel {
   display: flex;
   flex-direction: column;
-  width: 380px;
-  flex: 0 0 380px;
+  width: 100%;
+  height: 100%;
+  flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
-  border-left: 1px solid var(--ops-border);
   background: #fafcff;
 }
 
 
 .detail-header {
   display: flex;
-  align-items: flex-start;
-  gap: 12px;
+  flex-direction: column;
+  gap: 14px;
   padding: 18px 18px 14px;
   border-bottom: 1px solid var(--ops-border);
 }
+
+.detail-header-main { display: flex; align-items: center; gap: 12px; width: 100%; min-width: 0; }
 
 .detail-header-icon {
   display: grid;
@@ -1232,26 +1287,20 @@ onUnmounted(stopStatusPolling)
 .detail-header-icon.status-stopped { background: #fdf6ec; color: #e6a23c; }
 
 .detail-header-info { flex: 1; min-width: 0; }
+.detail-title { margin-bottom: 4px; color: var(--ops-text-secondary); font-size: 12px; }
 .detail-header-name { font-size: 16px; font-weight: 700; color: var(--ops-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.detail-close {
-  flex: 0 0 auto;
-  padding: 4px;
-  border-radius: 4px;
-  color: var(--ops-text-secondary);
-  font-size: 15px;
-  cursor: pointer;
-}
-.detail-close:hover { background: var(--ops-bg); color: var(--ops-text); }
+.detail-close-button { width: 36px; height: 36px; flex: 0 0 36px; margin-left: auto; border-color: var(--ops-border); color: var(--ops-text-secondary); }
+.detail-close-button:hover { border-color: var(--ops-primary); background: var(--ops-primary-light); color: var(--ops-primary); }
 
-.detail-header-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; flex-basis: 100%; margin-top: 10px; }
+.detail-header-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; width: 100%; }
 
 .detail-tabs { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .detail-tabs :deep(.el-tabs__header) { margin: 0; padding: 0 18px; }
 .detail-tabs :deep(.el-tabs__content) { flex: 1; min-height: 0; overflow-y: auto; }
 .detail-tabs :deep(.el-tab-pane) { height: 100%; }
 
-.detail-scroll { padding: 16px 18px 20px; }
+.detail-scroll { min-height: 100%; padding: 16px 18px 20px; box-sizing: border-box; }
 
 .detail-section-title { margin-bottom: 10px; color: var(--ops-text); font-size: 13px; font-weight: 700; }
 .detail-section-title.events-title, .detail-section-title.config-title { margin-top: 20px; }
@@ -1342,11 +1391,12 @@ onUnmounted(stopStatusPolling)
   color: #c9d1d9;
 }
 
-@media (max-width: 1100px) {
-  .master-detail { flex-direction: column; overflow: hidden; }
-  .instance-panel:has(+ .detail-panel) { border-bottom: 1px solid var(--ops-border); }
-  .detail-panel { width: 100%; flex: 1 1 auto; border-left: 0; border-top: 1px solid var(--ops-border); }
-}
+.logs-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.logs-toolbar .detail-section-title { margin: 0; }
+.detail-scroll.detail-logs { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+.logs-viewer-fill { display: flex; flex: 1 1 auto; min-height: 0; }
+.logs-viewer-fill :deep(.el-textarea) { height: 100%; }
+.logs-viewer-fill :deep(textarea) { height: 100% !important; min-height: 0 !important; overflow: auto; resize: none; }
 
 @media (max-width: 900px) {
   .services-page { min-height: 0; }
@@ -1356,5 +1406,6 @@ onUnmounted(stopStatusPolling)
   .instance-toolbar { flex-wrap: wrap; }
   .instance-search { width: 100%; margin-left: 0; }
   :deep(.el-dialog) { width: calc(100vw - 24px) !important; margin-top: 3vh !important; }
+  :deep(.el-drawer) { width: calc(100vw - 24px) !important; }
 }
 </style>

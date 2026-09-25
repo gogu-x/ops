@@ -1,6 +1,9 @@
 package model
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 type User struct {
 	ID           string    `json:"id" bson:"_id"`
@@ -38,8 +41,14 @@ type TokenResponse struct {
 
 // Host describes one Docker Engine managed by the ops platform.
 type Host struct {
-	ID         string    `json:"id" bson:"_id"`
+	ID string `json:"id" bson:"_id"`
+	// ProjectID is retained for records and clients created before hosts could
+	// be shared. ProjectIDs is the canonical many-to-many binding.
+	ProjectID  string    `json:"project_id" bson:"project_id"`
+	ProjectIDs []string  `json:"project_ids,omitempty" bson:"project_ids,omitempty"`
 	Name       string    `json:"name" bson:"name"`
+	InternalIP string    `json:"internal_ip" bson:"internal_ip"`
+	ExternalIP string    `json:"external_ip" bson:"external_ip"`
 	DockerHost string    `json:"docker_host" bson:"docker_host"`
 	TLSCA      string    `json:"tls_ca" bson:"tls_ca"`
 	TLSCert    string    `json:"tls_cert" bson:"tls_cert"`
@@ -47,6 +56,37 @@ type Host struct {
 	Note       string    `json:"note" bson:"note"`
 	CreatedAt  time.Time `json:"created_at" bson:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at" bson:"updated_at"`
+}
+
+// HasProject reports whether the host is available to a project. ProjectID
+// supports legacy MongoDB documents; new bindings are stored in ProjectIDs.
+func (h Host) HasProject(projectID string) bool {
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return false
+	}
+	if strings.TrimSpace(h.ProjectID) == projectID {
+		return true
+	}
+	for _, id := range h.ProjectIDs {
+		if strings.TrimSpace(id) == projectID {
+			return true
+		}
+	}
+	return false
+}
+
+// HasProjectBindings reports whether this host is assigned to any project.
+func (h Host) HasProjectBindings() bool {
+	if strings.TrimSpace(h.ProjectID) != "" {
+		return true
+	}
+	for _, id := range h.ProjectIDs {
+		if strings.TrimSpace(id) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // Project groups service types under a logical business project. EnvVars is
