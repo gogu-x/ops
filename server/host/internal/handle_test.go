@@ -11,10 +11,13 @@ func TestHostHandlersRegistered(t *testing.T) {
 	service := NewDockerService()
 	requests := []interface{}{
 		model.ListRequest{},
+		model.GetHostConfigurationRequest{},
 		model.CreateRequest{},
+		model.UpdateRequest{},
 		model.DeleteRequest{},
 		model.SetProjectHostsRequest{},
 		model.TestRequest{},
+		model.TestHostConnectionRequest{},
 		model.ContainerListRequest{},
 		model.ContainerInspectRequest{},
 		model.ContainerDeployRequest{},

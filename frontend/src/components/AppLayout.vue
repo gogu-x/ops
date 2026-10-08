@@ -1,372 +1,101 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import {
-  Odometer,
-  Monitor,
-  Grid,
-  FolderOpened,
-  DataAnalysis,
-  Fold,
-  Expand,
-  User,
-  SwitchButton,
-  Setting,
-  Cloudy,
-} from '@element-plus/icons-vue'
+import { Box, FolderOpened, Grid, Monitor, SwitchButton, User } from '@element-plus/icons-vue'
 import { useAuthStore } from '../stores/auth'
 
-const props = withDefaults(defineProps<{
-  fixedViewport?: boolean
-}>(), {
-  fixedViewport: false,
-})
-
+withDefaults(defineProps<{ fixedViewport?: boolean }>(), { fixedViewport: false })
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
-
-const collapsed = ref(false)
-
-interface MenuItem {
-  index: string
-  path: string
-  label: string
-  icon: any
-}
-
-const menuItems: MenuItem[] = [
-  { index: 'dashboard', path: '/', label: '控制台', icon: Odometer },
-  { index: 'services', path: '/services', label: '服务管理', icon: Grid },
-  { index: 'projects', path: '/projects', label: '项目管理', icon: FolderOpened },
-  { index: 'hosts', path: '/hosts', label: '基础设施', icon: Monitor },
-  { index: 'audit', path: '/audit', label: '审计日志', icon: DataAnalysis },
-]
-
-const activeIndex = computed(() => {
-  const match = menuItems.find((item) => item.path === route.path)
-  return match?.index || 'dashboard'
-})
-
-const activeLabel = computed(() => menuItems.find((item) => item.index === activeIndex.value)?.label || '控制台')
-
-function go(item: MenuItem) {
-  if (item.path === '/audit') {
-    ElMessage.info('审计日志模块即将上线')
-    return
-  }
-  if (route.path !== item.path) router.push(item.path)
-}
-
+const navigation = computed(() => [
+  { path: '/', label: '控制台', icon: Grid, visible: true },
+  { path: '/services', label: '服务', icon: Box, visible: auth.hasPermission('services.view') },
+  { path: '/projects', label: '项目', icon: FolderOpened, visible: auth.hasPermission('projects.view') },
+  { path: '/hosts', label: '主机', icon: Monitor, visible: auth.hasPermission('hosts.view') },
+  { path: '/permissions', label: '权限管理', icon: User, visible: auth.user?.role === 'admin' },
+].filter((item) => item.visible))
 async function logout() {
-  try {
-    await ElMessageBox.confirm('确定要退出登录吗？', '退出确认', { type: 'warning' })
-  } catch {
-    return
-  }
-  await auth.logout()
+  try { await ElMessageBox.confirm('确定要退出登录吗？', '退出登录', { type: 'warning' }) } catch { return }
+  try { await auth.logout() } catch { ElMessage.warning('会话已在本机清除') }
   await router.push('/login')
 }
 </script>
 
 <template>
-  <el-container class="pro-shell" :class="{ 'is-fixed-viewport': props.fixedViewport }">
-    <el-aside :width="collapsed ? '64px' : '220px'" class="pro-sider">
-      <div class="pro-logo">
-        <el-icon class="pro-logo-img" :size="24"><Cloudy /></el-icon>
-        <span v-if="!collapsed" class="pro-logo-text">Ops Platform</span>
-      </div>
-      <el-menu
-        class="pro-menu"
-        background-color="transparent"
-        text-color="rgba(255,255,255,0.65)"
-        active-text-color="#ffffff"
-        :default-active="activeIndex"
-        :collapse="collapsed"
-        :collapse-transition="false"
-      >
-        <el-menu-item v-for="item in menuItems" :key="item.index" :index="item.index" @click="go(item)">
-          <el-icon><component :is="item.icon" /></el-icon>
-          <template #title>{{ item.label }}</template>
-        </el-menu-item>
-      </el-menu>
-    </el-aside>
-
-    <el-container class="pro-body">
-      <el-header class="pro-header">
-        <div class="pro-header-left">
-          <el-icon class="pro-collapse-btn" @click="collapsed = !collapsed">
-            <component :is="collapsed ? Expand : Fold" />
-          </el-icon>
-          <el-breadcrumb separator="/" class="pro-breadcrumb">
-            <el-breadcrumb-item :to="{ path: '/' }">首页</el-breadcrumb-item>
-            <el-breadcrumb-item>{{ activeLabel }}</el-breadcrumb-item>
-          </el-breadcrumb>
-        </div>
-        <div class="pro-header-right">
-          <el-dropdown trigger="click">
-            <span class="pro-user">
-              <el-avatar :size="32" class="pro-avatar">{{ (auth.user?.username || '?').slice(0, 1).toUpperCase() }}</el-avatar>
-              <span class="pro-user-name">{{ auth.user?.username }}</span>
-              <el-tag size="small" :type="auth.user?.role === 'admin' ? 'danger' : 'info'" round class="pro-role-tag">
-                {{ auth.user?.role }}
-              </el-tag>
-            </span>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item :icon="User" disabled>{{ auth.user?.username }}</el-dropdown-item>
-                <el-dropdown-item :icon="Setting" disabled>个人设置</el-dropdown-item>
-                <el-dropdown-item :icon="SwitchButton" divided @click="logout">退出登录</el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
-        </div>
-      </el-header>
-
-      <el-main class="pro-main">
-        <div class="pro-page">
-          <slot name="header" />
-          <slot />
-        </div>
-      </el-main>
-    </el-container>
-  </el-container>
+  <div class="app-shell" :class="{ 'is-workspace': fixedViewport }">
+    <header class="app-header">
+      <RouterLink to="/" class="app-brand" aria-label="OPS 控制台"><span class="brand-symbol"><el-icon><Grid /></el-icon></span><span>OPS</span></RouterLink>
+      <nav class="app-navigation" aria-label="主导航">
+        <RouterLink v-for="item in navigation" :key="item.path" :to="item.path" :class="{ active: route.path === item.path }" :aria-current="route.path === item.path ? 'page' : undefined" :title="item.label"><el-icon><component :is="item.icon" /></el-icon><span>{{ item.label }}</span></RouterLink>
+      </nav>
+      <el-dropdown trigger="click" class="account-menu">
+        <button class="account-button" aria-label="账户菜单"><span class="account-avatar">{{ (auth.user?.username || '?').slice(0, 1).toUpperCase() }}</span><span class="account-name">{{ auth.user?.username }}</span></button>
+        <template #dropdown><el-dropdown-menu>
+          <el-dropdown-item :icon="User" disabled>{{ auth.user?.role === 'admin' ? '平台管理员' : '普通用户' }}</el-dropdown-item>
+          <el-dropdown-item :icon="SwitchButton" divided @click="logout">退出登录</el-dropdown-item>
+        </el-dropdown-menu></template>
+      </el-dropdown>
+    </header>
+    <main class="app-main"><slot name="header" /><slot /></main>
+  </div>
 </template>
 
 <style scoped>
-.pro-shell {
-  min-height: 100vh;
-  background: var(--ops-bg);
+.app-shell { display: flex; min-height: 100vh; background: var(--ops-bg); }
+.app-header { width: 220px; height: 100vh; height: 100dvh; min-height: 100vh; flex: 0 0 220px; align-self: flex-start; display: flex; flex-direction: column; align-items: stretch; gap: 30px; padding: 22px 12px 16px; background: var(--ops-sider-bg); border-right: 1px solid rgba(255, 255, 255, .08); position: sticky; top: 0; z-index: 20; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, .24) transparent; box-sizing: border-box; }
+.app-brand { display: inline-flex; align-items: center; gap: 10px; color: #fff; font-size: 21px; font-weight: 650; letter-spacing: 1px; text-decoration: none; }
+.brand-symbol { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; background: var(--ops-primary); color: #fff; font-size: 18px; }
+.app-navigation { display: flex; flex-direction: column; gap: 5px; }
+.app-navigation a { display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 7px; text-decoration: none; color: rgba(255, 255, 255, .68); font-size: 14px; }
+.app-navigation a:hover { background: rgba(255, 255, 255, .08); color: #fff; }
+.app-navigation a.active { background: var(--ops-primary); color: #fff; font-weight: 600; }
+.app-navigation .el-icon { font-size: 17px; }
+.account-menu { margin-top: auto; }
+.account-button { display: flex; gap: 9px; align-items: center; padding: 5px 0 5px 10px; border: 0; background: transparent; color: #fff; font: inherit; cursor: pointer; }
+.account-avatar { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: rgba(255, 255, 255, .14); color: #fff; font-size: 12px; }
+.account-name { font-size: 12px; }
+.app-main { width: 100%; max-width: 1600px; min-width: 0; flex: 1; margin: 0 auto; padding: 28px 32px; box-sizing: border-box; }
+.is-workspace { height: 100dvh; min-height: 0; display: flex; flex-direction: row; overflow: hidden; background: #fff; }
+.is-workspace .app-header { min-height: 0; height: 100%; flex: 0 0 220px; }
+.is-workspace .app-main { display: flex; width: auto; max-width: none; min-height: 0; flex: 1; padding: 0; }
+@media (max-width: 1000px) and (min-width: 761px) {
+  .app-header { width: 64px; flex-basis: 64px; align-items: center; padding: 18px 8px 12px; gap: 26px; }
+  .app-brand > span:last-child, .app-navigation a > span, .account-name { display: none; }
+  .app-brand { justify-content: center; }
+  .app-navigation { width: 100%; align-items: center; }
+  .app-navigation a { justify-content: center; width: 44px; padding: 0; }
+  .account-button { padding: 0; }
+  .is-workspace .app-header { flex-basis: 64px; }
+  .app-main { padding: 24px 20px; }
 }
-
-.pro-shell.is-fixed-viewport {
-  height: 100vh;
-  height: 100dvh;
-  min-height: 0;
-  overflow: hidden;
+@media (max-width: 760px) {
+  .app-shell { flex-direction: column; }
+  .app-header { position: relative; width: 100%; min-height: 58px; height: 58px; flex: 0 0 58px; flex-direction: row; align-items: center; gap: 20px; padding: 0 16px; background: #fff; border-right: 0; border-bottom: 1px solid var(--ops-border); overflow: visible; }
+  .app-brand { color: var(--ops-text); }
+  .account-button { color: var(--ops-text); }
+  .account-avatar { background: var(--ops-primary-light); color: var(--ops-primary); }
+  .app-navigation { position: fixed; right: 0; bottom: 0; left: 0; z-index: 100; display: flex; height: calc(64px + env(safe-area-inset-bottom)); flex-direction: row; align-items: stretch; justify-content: space-around; gap: 0; padding: 4px 8px env(safe-area-inset-bottom); box-sizing: border-box; background: var(--ops-sider-bg); border-top: 1px solid rgba(255, 255, 255, .12); }
+  .app-navigation a { flex: 1; flex-direction: column; justify-content: center; gap: 3px; min-height: 0; padding: 4px 2px; border: 0; border-radius: 6px; color: rgba(255, 255, 255, .68); font-size: 10px; }
+  .app-navigation a:hover { background: rgba(255, 255, 255, .08); color: #fff; }
+  .app-navigation a.active { background: var(--ops-primary); color: #fff; }
+  .app-navigation .el-icon { display: block; font-size: 19px; }
+  .account-menu { margin: 0 0 0 auto; }
+  .app-main { padding: 20px 16px calc(84px + env(safe-area-inset-bottom)); }
+  .is-workspace { flex-direction: column; }
+  .is-workspace .app-header { height: 58px; min-height: 58px; flex: 0 0 58px; }
+  .is-workspace .app-main { width: 100%; flex: 1; padding: 0 0 calc(64px + env(safe-area-inset-bottom)); box-sizing: border-box; }
 }
-
-.pro-shell.is-fixed-viewport .pro-body {
-  height: 100%;
-  min-height: 0;
-}
-
-.pro-shell.is-fixed-viewport .pro-main {
-  display: flex;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.pro-shell.is-fixed-viewport .pro-page {
-  display: flex;
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-}
-
-.pro-sider {
-  background: var(--ops-sider-bg);
-  transition: width 0.2s;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-
-.pro-logo {
-  height: 56px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 0 20px;
-  overflow: hidden;
-  white-space: nowrap;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.pro-logo-img {
-  flex-shrink: 0;
-  color: #fff;
-}
-
-.pro-logo-text {
-  color: #fff;
-  font-size: 17px;
-  font-weight: 600;
-  letter-spacing: 0.5px;
-}
-
-.pro-menu {
-  border-right: 0;
-  flex: 1;
-  padding-top: 8px;
-}
-
-.pro-menu :deep(.el-menu-item) {
-  margin: 4px 8px;
-  border-radius: 6px;
-  height: 44px;
-}
-
-.pro-menu :deep(.el-menu-item.is-active) {
-  background: var(--ops-primary) !important;
-  color: #fff !important;
-}
-
-.pro-menu :deep(.el-menu-item:hover) {
-  background: rgba(255, 255, 255, 0.08);
-}
-
-.pro-body {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.pro-header {
-  height: 56px;
-  background: #fff;
-  border-bottom: 1px solid var(--ops-border);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 20px;
-  position: sticky;
-  top: 0;
-  z-index: 10;
-}
-
-.pro-header-left {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-
-.pro-collapse-btn {
-  font-size: 18px;
-  cursor: pointer;
-  color: var(--ops-text-secondary);
-  transition: color 0.2s;
-}
-
-.pro-collapse-btn:hover {
-  color: var(--ops-primary);
-}
-
-.pro-breadcrumb {
-  font-size: 14px;
-}
-
-.pro-header-right {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.pro-user {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  padding: 6px 10px;
-  border-radius: 6px;
-  transition: background 0.2s;
-}
-
-.pro-user:hover {
-  background: var(--ops-bg);
-}
-
-.pro-avatar {
-  background: var(--ops-primary);
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.pro-user-name {
-  font-size: 14px;
-  color: var(--ops-text);
-}
-
-.pro-role-tag {
-  text-transform: uppercase;
-  font-size: 11px;
-}
-
-.pro-main {
-  padding: 20px;
-  flex: 1;
-}
-
-.pro-page {
-  width: 100%;
-}
-
-@media (max-width: 900px) {
-  .pro-main { padding: 16px; }
-  .pro-user-name, .pro-role-tag { display: none; }
-}
-
-@media (max-width: 640px) {
-  .pro-shell { display: block; padding-bottom: 64px; }
-
-  .pro-sider {
-    position: fixed;
-    right: 0;
-    bottom: 0;
-    left: 0;
-    z-index: 100;
-    width: 100% !important;
-    height: 64px;
-    border-top: 1px solid rgba(255, 255, 255, .12);
-  }
-
-  .pro-logo { display: none; }
-
-  .pro-menu {
-    display: flex;
-    width: 100%;
-    padding: 0;
-  }
-
-  .pro-menu :deep(.el-menu-item) {
-    flex: 1;
-    height: 64px;
-    margin: 0;
-    padding: 0 !important;
-    flex-direction: column;
-    justify-content: center;
-    gap: 2px;
-    border-radius: 0;
-    font-size: 10px;
-    line-height: 1.2;
-  }
-
-  .pro-menu :deep(.el-menu-item .el-icon) {
-    width: auto;
-    margin: 0;
-    font-size: 19px;
-  }
-
-  .pro-menu :deep(.el-menu-item .el-menu-tooltip__trigger) {
-    position: static;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 0 !important;
-  }
-
-  .pro-header {
-    height: 52px;
-    padding: 0 12px;
-  }
-
-  .pro-collapse-btn { display: none; }
-  .pro-header-left { min-width: 0; gap: 0; }
-  .pro-breadcrumb { min-width: 0; font-size: 12px; }
-  .pro-user { padding: 4px; }
-  .pro-avatar { width: 30px !important; height: 30px !important; }
-  .pro-main { padding: 12px; }
+@media (max-width: 480px) {
+  .app-header { gap: 10px; padding: 0 10px; }
+  .app-brand { gap: 6px; font-size: 17px; }
+  .brand-symbol { width: 25px; height: 25px; font-size: 15px; }
+  .app-navigation { justify-content: space-around; gap: 0; overflow: visible; }
+  .app-navigation a { flex: 1; padding: 4px 2px; font-size: 10px; }
+  .account-avatar { width: 25px; height: 25px; }
+  .account-button { padding-left: 0; }
+  .app-main { padding: 16px 12px calc(84px + env(safe-area-inset-bottom)); }
+  .is-workspace .app-main { padding: 0 0 calc(64px + env(safe-area-inset-bottom)); }
 }
 </style>

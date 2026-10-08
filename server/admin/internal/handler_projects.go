@@ -10,7 +10,7 @@ import (
 )
 
 func (a *AdminService) registerProjectRoutes(r *gin.RouterGroup) {
-	r.GET("/projects", a.listProjects)
+	r.GET("/projects", requireAnyPermission(model.PermissionProjectsView, model.PermissionServicesView, model.PermissionHostsView), a.listProjects)
 	r.POST("/projects", requireRole("admin"), a.createProject)
 	r.PUT("/projects/:id", requireRole("admin"), a.updateProject)
 	r.PUT("/projects/:id/hosts", requireRole("admin"), a.updateProjectHosts)
@@ -22,6 +22,19 @@ func (a *AdminService) listProjects(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"ok": false, "error": err.Error()})
 		return
+	}
+	user := currentUser(c)
+	if user.Role != model.RoleAdmin {
+		visible := items[:0]
+		for _, item := range items {
+			if user.HasProject(item.ID) {
+				if !user.HasPermission(model.PermissionProjectsView) && !user.HasPermission(model.PermissionServicesManage) {
+					item.EnvVars = ""
+				}
+				visible = append(visible, item)
+			}
+		}
+		items = visible
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true, "data": items})
 }
@@ -66,9 +79,7 @@ func (a *AdminService) updateProject(c *gin.Context) {
 }
 
 func (a *AdminService) updateProjectHosts(c *gin.Context) {
-	var request struct {
-		HostIDs *[]string `json:"host_ids"`
-	}
+	var request model.UpdateProjectHostsRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "invalid project hosts request"})
 		return
@@ -77,7 +88,7 @@ func (a *AdminService) updateProjectHosts(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "host_ids is required"})
 		return
 	}
-	if err := a.app.SetProjectHosts(c.Request.Context(), c.Param("id"), *request.HostIDs); err != nil {
+	if err := a.app.SetProjectHosts(c.Request.Context(), c.Param("id"), request.HostIDs); err != nil {
 		status := http.StatusBadRequest
 		if errors.Is(err, project.ErrNotFound) || errors.Is(err, model.ErrNotFound) {
 			status = http.StatusNotFound

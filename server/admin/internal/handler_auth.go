@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/gogu-x/ops/admin/internal/auth"
 	"github.com/gogu-x/ops/model"
 )
 
@@ -55,8 +54,8 @@ func (a *AdminService) logout(c *gin.Context) {
 }
 
 func (a *AdminService) me(c *gin.Context) {
-	claims, _ := c.Get("claims")
-	c.JSON(http.StatusOK, gin.H{"ok": true, "data": claims})
+	user := currentUser(c)
+	c.JSON(http.StatusOK, gin.H{"ok": true, "data": user})
 }
 
 func (a *AdminService) authMiddleware() gin.HandlerFunc {
@@ -73,20 +72,58 @@ func (a *AdminService) authMiddleware() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		user, err := a.auth.FindUserByID(c.Request.Context(), claims.UserID)
+		if err != nil || user.Disabled {
+			c.JSON(http.StatusUnauthorized, gin.H{"ok": false, "error": "用户不可用，请重新登录"})
+			c.Abort()
+			return
+		}
 		c.Set("claims", claims)
+		c.Set("user", user)
 		c.Next()
 	}
 }
 
 func requireRole(role string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		claims, ok := c.Get("claims")
-		value, valid := claims.(*auth.Claims)
-		if !ok || !valid || value.Role != role {
+		user := currentUser(c)
+		if user.ID == "" || user.Role != role {
 			c.JSON(http.StatusForbidden, gin.H{"ok": false, "error": "无权限"})
 			c.Abort()
 			return
 		}
 		c.Next()
 	}
+}
+
+func requirePermission(permission string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		user := currentUser(c)
+		if user.ID == "" || !user.HasPermission(permission) {
+			c.JSON(http.StatusForbidden, gin.H{"ok": false, "error": "无权限"})
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
+
+func requireAnyPermission(permissions ...string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		user := currentUser(c)
+		for _, permission := range permissions {
+			if user.HasPermission(permission) {
+				c.Next()
+				return
+			}
+		}
+		c.JSON(http.StatusForbidden, gin.H{"ok": false, "error": "无权限"})
+		c.Abort()
+	}
+}
+
+func currentUser(c *gin.Context) model.User {
+	value, _ := c.Get("user")
+	user, _ := value.(model.User)
+	return user
 }

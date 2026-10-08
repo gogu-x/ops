@@ -42,6 +42,43 @@ func TestHostTLSValidation(t *testing.T) {
 	}
 }
 
+func TestHostUpdatePreservesProjectBindingsAndCreationTime(t *testing.T) {
+	a := NewDockerService()
+	host, err := a.create(tlsHost("docker-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.setProjectHosts("project-1", []string{host.ID}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := a.repo.Get(context.Background(), host.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := a.update(model.Host{ID: host.ID, Name: "docker-updated", DockerHost: "tcp://10.0.0.2:2376", TLSCA: "new-ca", TLSCert: "new-cert", TLSKey: "new-key", Note: "updated"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Name != "docker-updated" || updated.DockerHost != "tcp://10.0.0.2:2376" || updated.Note != "updated" {
+		t.Fatalf("host configuration was not updated: %+v", updated)
+	}
+	if !updated.HasProject("project-1") || !updated.CreatedAt.Equal(before.CreatedAt) {
+		t.Fatalf("update should preserve bindings and creation time: before=%+v updated=%+v", before, updated)
+	}
+	if updated.UpdatedAt.Before(before.UpdatedAt) {
+		t.Fatalf("updated_at moved backwards: before=%v updated=%v", before.UpdatedAt, updated.UpdatedAt)
+	}
+
+	other, err := a.create(tlsHost("docker-2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.update(model.Host{ID: other.ID, Name: "docker-updated", DockerHost: "tcp://127.0.0.1:2376"}); !errors.Is(err, ErrAlreadyExists) {
+		t.Fatalf("expected duplicate-name error on update, got %v", err)
+	}
+}
+
 func TestProjectHostBindingsAllowMultipleProjects(t *testing.T) {
 	a := NewDockerService()
 	host1, err := a.create(tlsHost("docker-1"))

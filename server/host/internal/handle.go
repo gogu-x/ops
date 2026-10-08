@@ -17,10 +17,13 @@ func (a *DockerService) registerHandlers() {
 	a.handlers = make(handlerRegistry)
 
 	registerHandler(a.handlers, a.handleList)
+	registerHandler(a.handlers, a.handleGetConfiguration)
 	registerHandler(a.handlers, a.handleCreate)
+	registerHandler(a.handlers, a.handleUpdate)
 	registerHandler(a.handlers, a.handleDelete)
 	registerHandler(a.handlers, a.handleSetProjectHosts)
 	registerHandler(a.handlers, a.handleTest)
+	registerHandler(a.handlers, a.handleTestConnection)
 	registerHandler(a.handlers, a.handleContainerList)
 	registerHandler(a.handlers, a.handleContainerInspect)
 	registerHandler(a.handlers, a.handleContainerDeploy)
@@ -58,9 +61,19 @@ func (a *DockerService) handleList(ctx tree.Context, _ model.ListRequest) {
 	ctx.Response(model.HostListResponse{Hosts: hosts}, err)
 }
 
+func (a *DockerService) handleGetConfiguration(ctx tree.Context, request model.GetHostConfigurationRequest) {
+	host, err := a.repo.Get(context.Background(), request.ID)
+	ctx.Response(host, err)
+}
+
 func (a *DockerService) handleCreate(ctx tree.Context, request model.CreateRequest) {
 	created, err := a.create(request.Host)
 	ctx.Response(publicHost(created), err)
+}
+
+func (a *DockerService) handleUpdate(ctx tree.Context, request model.UpdateRequest) {
+	updated, err := a.update(request.Host)
+	ctx.Response(publicHost(updated), err)
 }
 
 func (a *DockerService) handleDelete(ctx tree.Context, request model.DeleteRequest) {
@@ -75,6 +88,11 @@ func (a *DockerService) handleSetProjectHosts(ctx tree.Context, request model.Se
 
 func (a *DockerService) handleTest(ctx tree.Context, request model.TestRequest) {
 	result, err := a.test(request.ID)
+	ctx.Response(result, err)
+}
+
+func (a *DockerService) handleTestConnection(ctx tree.Context, request model.TestHostConnectionRequest) {
+	result, err := a.testConnection(request.Host)
 	ctx.Response(result, err)
 }
 

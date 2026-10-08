@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Plus, Edit, Delete, Box, VideoPlay, VideoPause, RefreshRight, Refresh, Upload,
-  Search, ArrowDown, MoreFilled, Close,
+  Search, MoreFilled, Close, ArrowRight, FolderOpened,
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '../stores/auth'
 import { environmentApi, type Environment, type EnvironmentForm } from '../api/environments'
@@ -15,18 +16,23 @@ import { eventApi, type InstanceEvent } from '../api/events'
 import AppLayout from '../components/AppLayout.vue'
 
 const auth = useAuthStore()
+const route = useRoute()
+const router = useRouter()
 const environments = ref<Environment[]>([])
 const types = ref<ServiceType[]>([])
 const instances = ref<ServiceInstance[]>([])
 const hosts = ref<Host[]>([])
 const projects = ref<Project[]>([])
+const latestStartedAt = ref<Record<string, string>>({})
 const loading = ref(false)
+const loadError = ref(false)
 const submitting = ref(false)
-const canManage = computed(() => auth.user?.role === 'admin')
+const canManage = computed(() => auth.hasPermission('services.manage'))
+let servicesDisposed = false
 
 // -------- 顶部筛选状态：项目 -> 环境 -> 服务类型 --------
-const activeProjectId = ref<string>('')
-const activeEnvironmentId = ref<string>('')
+const activeProjectId = ref<string>(typeof route.query.project === 'string' ? route.query.project : '')
+const activeEnvironmentId = ref<string>(typeof route.query.environment === 'string' ? route.query.environment : '')
 const activeTypeId = ref<string>('')
 const keyword = ref('')
 
@@ -35,7 +41,7 @@ function environmentsInProject(projectId: string): Environment[] {
 }
 
 function typesInEnvironment(environmentId: string): ServiceType[] {
-  return types.value.filter((t) => t.environment_id === environmentId)
+  return types.value.filter((t) => t.environment_id === environmentId && t.project_id === activeProjectId.value)
 }
 
 function countInType(typeId: string): number {
@@ -46,10 +52,28 @@ const activeProject = computed(() => projects.value.find((p) => p.id === activeP
 const activeEnvironment = computed(() => environments.value.find((e) => e.id === activeEnvironmentId.value) || null)
 const activeType = computed(() => types.value.find((t) => t.id === activeTypeId.value) || null)
 
+function imageVersion(image?: string | null): string {
+  if (!image) return '—'
+  const separator = image.lastIndexOf(':')
+  return separator > image.lastIndexOf('/') ? image.slice(separator + 1) : image
+}
+
 const visibleInstances = computed(() => {
-  if (!activeTypeId.value) return []
-  return instances.value.filter((i) => i.service_type_id === activeTypeId.value)
+  const allowedTypes = new Set(typesInEnvironment(activeEnvironmentId.value).map((t) => t.id))
+  return instances.value.filter((i) => allowedTypes.has(i.service_type_id) && (!activeTypeId.value || i.service_type_id === activeTypeId.value))
 })
+
+const environmentInstanceCount = computed(() => typesInEnvironment(activeEnvironmentId.value).reduce((count, type) => count + countInType(type.id), 0))
+
+function selectProject(id: string) {
+  activeProjectId.value = id
+  onProjectChange()
+}
+
+function selectEnvironment(id: string) {
+  activeEnvironmentId.value = id
+  onEnvironmentChange()
+}
 
 const filteredInstances = computed(() => {
   const normalizedKeyword = keyword.value.trim().toLowerCase()
@@ -60,6 +84,7 @@ const filteredInstances = computed(() => {
 
 async function loadAll() {
   loading.value = true
+  loadError.value = false
   try {
     const [availableEnvironments, serviceTypes, serviceInstances, availableHosts, availableProjects] = await Promise.all([
       environmentApi.list(),
@@ -79,34 +104,36 @@ async function loadAll() {
     if (!activeEnvironmentId.value || !environmentsInProject(activeProjectId.value).some((e) => e.id === activeEnvironmentId.value)) {
       activeEnvironmentId.value = environmentsInProject(activeProjectId.value)[0]?.id || ''
     }
-    if (!activeTypeId.value || !typesInEnvironment(activeEnvironmentId.value).some((t) => t.id === activeTypeId.value)) {
-      activeTypeId.value = typesInEnvironment(activeEnvironmentId.value)[0]?.id || ''
+    if (activeTypeId.value && !typesInEnvironment(activeEnvironmentId.value).some((t) => t.id === activeTypeId.value)) {
+      activeTypeId.value = ''
     }
     if (activeInstanceId.value && !instances.value.some((i) => i.id === activeInstanceId.value)) {
       activeInstanceId.value = ''
     }
   } catch {
+    loadError.value = true
     ElMessage.error('数据加载失败')
   } finally {
     loading.value = false
   }
 }
 
-// 用户从顶部下拉切换项目：级联重置环境 -> 类型 -> 实例选中态。
+// 切换项目时清除上一个项目的环境和实例选择。
 function onProjectChange() {
   activeEnvironmentId.value = environmentsInProject(activeProjectId.value)[0]?.id || ''
   onEnvironmentChange()
 }
 
-// 用户从顶部下拉切换环境：级联重置类型 -> 实例选中态。
+// 环境切换后默认展示该环境下的全部服务。
 function onEnvironmentChange() {
-  activeTypeId.value = typesInEnvironment(activeEnvironmentId.value)[0]?.id || ''
+  activeTypeId.value = ''
   onTypeChange()
 }
 
-// 用户点击服务类型 Tab：关闭右侧详情面板（需要双击某一行实例才会重新打开）。
+// 切换服务类型时关闭当前详情，避免显示其他分组的实例。
 function onTypeChange() {
   activeInstanceId.value = ''
+  detailVisible.value = false
   keyword.value = ''
 }
 
@@ -259,11 +286,12 @@ const instanceHostOptions = computed(() => {
 })
 
 function openCreateInstance() {
-  if (!activeType.value) return
+  const targetType = activeType.value || typesInEnvironment(activeEnvironmentId.value)[0]
+  if (!targetType) return
   editingInstanceId.value = ''
   Object.assign(instanceForm, {
-    service_type_id: activeType.value.id,
-    host_id: hosts.value.find((host) => hostBelongsToProject(host, activeType.value!.project_id))?.id || '',
+    service_type_id: targetType.id,
+    host_id: hosts.value.find((host) => hostBelongsToProject(host, targetType.project_id))?.id || '',
     name: '',
     image: '',
     params: [],
@@ -290,10 +318,20 @@ function openEditInstance(item: ServiceInstance) {
     restart_policy: item.restart_policy || 'unless-stopped',
     note: item.note,
   })
-  instanceDialogVisible.value = true
+  detailEditMode.value = true
+  detailTab.value = 'config'
 }
 
-async function saveInstance() {
+function cancelInstanceEdit() {
+  detailEditMode.value = false
+  editingInstanceId.value = ''
+}
+
+async function saveInstance(fromDetail = false) {
+  if (!instanceForm.service_type_id) {
+    ElMessage.warning('请选择服务类型')
+    return
+  }
   if (!instanceForm.host_id) {
     ElMessage.warning('请选择部署主机')
     return
@@ -312,10 +350,13 @@ async function saveInstance() {
     let saved: ServiceInstance
     if (editingInstanceId.value) saved = await instanceApi.update(editingInstanceId.value, payload)
     else saved = await instanceApi.create(payload)
-    ElMessage.success(editingInstanceId.value ? '实例已更新' : '服务已部署')
-    instanceDialogVisible.value = false
+    const wasEditing = Boolean(editingInstanceId.value)
+    ElMessage.success(wasEditing ? '实例已更新' : '服务已部署')
+    if (fromDetail) detailEditMode.value = false
+    else instanceDialogVisible.value = false
     await loadAll()
     activeInstanceId.value = saved.id
+    if (fromDetail) editingInstanceId.value = ''
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.error || '保存失败')
   } finally {
@@ -369,9 +410,49 @@ function formatRelativeTime(value?: string) {
   return `${Math.floor(hours / 24)} 天`
 }
 
+function runtimeDuration(row: ServiceInstance) {
+  if (row.status !== 'running') return '—'
+  const match = row.status_text?.match(/^Up\s+(.+?)(?:\s+\(.*\))?$/i)
+  if (!match) return '—'
+  return match[1]
+    .replace(/less than a second/i, '不足 1 秒')
+    .replace(/(\d+)\s+years?/gi, '$1 年')
+    .replace(/(\d+)\s+weeks?/gi, '$1 周')
+    .replace(/(\d+)\s+days?/gi, '$1 天')
+    .replace(/(\d+)\s+hours?/gi, '$1 小时')
+    .replace(/(\d+)\s+minutes?/gi, '$1 分钟')
+    .replace(/(\d+)\s+seconds?/gi, '$1 秒')
+}
+
+const startEventTypes = new Set(['deploy_succeeded', 'update_image_succeeded', 'container_started', 'container_restarted'])
+let startupEventRequest = 0
+
+async function loadLatestStartedAt() {
+  const requestId = ++startupEventRequest
+  const targets = [...visibleInstances.value]
+  const results: Record<string, string> = {}
+  let cursor = 0
+  await Promise.all(Array.from({ length: Math.min(4, targets.length) }, async () => {
+    while (cursor < targets.length && requestId === startupEventRequest && !servicesDisposed) {
+      const item = targets[cursor++]
+      try {
+        const events = await eventApi.list(item.id, 20)
+        const latestStart = events.find((event) => startEventTypes.has(event.type))
+        if (latestStart) results[item.id] = latestStart.created_at
+      } catch {
+        // Keep the timestamp empty when lifecycle history is unavailable.
+      }
+    }
+  }))
+  if (requestId === startupEventRequest && !servicesDisposed) latestStartedAt.value = results
+}
+
+watch([activeProjectId, activeEnvironmentId, activeTypeId], () => {
+  if (!loading.value && projects.value.length) void loadLatestStartedAt()
+})
+
 async function refreshAll() {
   await loadAll()
-  if (visibleInstances.value.length) await Promise.all(visibleInstances.value.map((row) => refreshInstanceStatus(row)))
   if (activeInstanceId.value) await loadEvents(activeInstanceId.value)
 }
 
@@ -463,7 +544,8 @@ async function refreshInstanceStatus(row: ServiceInstance) {
     const index = instances.value.findIndex((i) => i.id === row.id)
     if (index !== -1) instances.value[index] = latest
   } catch {
-    // ignore transient status refresh errors; next poll will retry
+    const index = instances.value.findIndex((item) => item.id === row.id)
+    if (index !== -1) instances.value[index] = { ...instances.value[index], status: 'unknown', status_text: '状态获取失败，请刷新重试' }
   }
 }
 
@@ -502,12 +584,19 @@ async function submitUpdateImage() {
 }
 
 let statusPollTimer: ReturnType<typeof setInterval> | null = null
+let statusPolling = false
 
 function startStatusPolling() {
   stopStatusPolling()
   statusPollTimer = setInterval(async () => {
-    if (!visibleInstances.value.length) return
-    await Promise.all(visibleInstances.value.map((row) => refreshInstanceStatus(row)))
+    if (statusPolling || loading.value || document.hidden || !visibleInstances.value.length) return
+    statusPolling = true
+    const targets = [...visibleInstances.value]
+    try {
+      for (let offset = 0; offset < targets.length && statusPollTimer; offset += 4) {
+        await Promise.all(targets.slice(offset, offset + 4).map(refreshInstanceStatus))
+      }
+    } finally { statusPolling = false }
   }, 10000)
 }
 
@@ -520,6 +609,7 @@ function stopStatusPolling() {
 
 // -------- 实例详情抽屉：概览/配置/事件/日志 --------
 const detailVisible = ref(false)
+const detailEditMode = ref(false)
 const logsLoading = ref(false)
 const logsContent = ref('')
 let logsRequestId = 0
@@ -554,39 +644,54 @@ const detailTab = ref<'overview' | 'config' | 'events' | 'logs'>('overview')
 
 function openInstanceDetails(row: ServiceInstance) {
   activeInstanceId.value = row.id
+  detailEditMode.value = false
   detailVisible.value = true
+}
+
+async function openInstanceLogs(row: ServiceInstance) {
+  openInstanceDetails(row)
+  await nextTick()
+  detailTab.value = 'logs'
 }
 
 function onDetailDrawerClosed() {
   activeInstanceId.value = ''
+  detailEditMode.value = false
+  editingInstanceId.value = ''
 }
 
 const detailData = ref<ContainerDetail | null>(null)
 const detailLoading = ref(false)
+let detailRequestId = 0
 
 async function loadDetail(instanceId: string) {
+  const requestId = ++detailRequestId
   detailLoading.value = true
   detailData.value = null
   try {
-    detailData.value = await instanceApi.detail(instanceId)
+    const value = await instanceApi.detail(instanceId)
+    if (requestId === detailRequestId && activeInstanceId.value === instanceId) detailData.value = value
   } catch {
-    detailData.value = null
+    if (requestId === detailRequestId && activeInstanceId.value === instanceId) detailData.value = null
   } finally {
-    detailLoading.value = false
+    if (requestId === detailRequestId) detailLoading.value = false
   }
 }
 
 const events = ref<InstanceEvent[]>([])
 const eventsLoading = ref(false)
+let eventsRequestId = 0
 
 async function loadEvents(instanceId: string) {
+  const requestId = ++eventsRequestId
   eventsLoading.value = true
   try {
-    events.value = await eventApi.list(instanceId, 20)
+    const value = await eventApi.list(instanceId, 20)
+    if (requestId === eventsRequestId && activeInstanceId.value === instanceId) events.value = value
   } catch {
-    events.value = []
+    if (requestId === eventsRequestId && activeInstanceId.value === instanceId) events.value = []
   } finally {
-    eventsLoading.value = false
+    if (requestId === eventsRequestId) eventsLoading.value = false
   }
 }
 
@@ -656,170 +761,133 @@ watch([activeInstanceId, detailTab], ([id, tab]) => {
 
 onMounted(() => {
   loadAll().then(() => {
+    if (servicesDisposed) return
     startStatusPolling()
-    if (activeInstanceId.value) {
-      const item = instances.value.find((i) => i.id === activeInstanceId.value)
-      if (item && item.status !== 'not_deployed') loadDetail(activeInstanceId.value)
-      loadEvents(activeInstanceId.value)
+    const linked = instances.value.find((item) => item.id === route.query.instance)
+    const linkedType = types.value.find((type) => type.id === linked?.service_type_id)
+    if (linked && linkedType) {
+      activeProjectId.value = linkedType.project_id
+      activeEnvironmentId.value = linkedType.environment_id
+      activeTypeId.value = ''
+      openInstanceDetails(linked)
     }
+    void loadLatestStartedAt()
   })
 })
-onUnmounted(stopStatusPolling)
+onUnmounted(() => {
+  servicesDisposed = true
+  startupEventRequest++
+  stopStatusPolling()
+  detailRequestId++
+  eventsRequestId++
+  logsRequestId++
+})
 </script>
 
 <template>
   <AppLayout fixed-viewport>
-    <div class="services-page">
-      <!-- 顶部面包屑 + 筛选 -->
-      <div class="top-bar">
-        <div class="breadcrumb">
-          <template v-if="activeProject">
-            <span>{{ activeProject.name }}</span>
-          </template>
-          <template v-if="activeEnvironment">
-            <span class="breadcrumb-sep">/</span>
-            <span>{{ activeEnvironment.name }}</span>
-          </template>
-          <template v-if="activeType">
-            <span class="breadcrumb-sep">/</span>
-            <span class="breadcrumb-current">{{ activeType.name }}</span>
-          </template>
-        </div>
-        <div class="top-bar-actions">
-          <div class="top-bar-field">
-            <span>项目</span>
-            <el-select v-model="activeProjectId" placeholder="选择项目" :suffix-icon="ArrowDown" @change="onProjectChange">
-              <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
-            </el-select>
-          </div>
-          <div class="top-bar-field">
-            <span>环境</span>
-            <el-select v-model="activeEnvironmentId" placeholder="选择环境" :suffix-icon="ArrowDown" @change="onEnvironmentChange">
-              <el-option v-for="env in environmentsInProject(activeProjectId)" :key="env.id" :label="env.name" :value="env.id" />
-            </el-select>
-          </div>
-          <el-tooltip content="刷新" placement="top">
-            <el-button :icon="Refresh" :loading="loading" circle @click="refreshAll" />
-          </el-tooltip>
-          <el-button v-if="canManage" type="primary" :icon="Plus" :disabled="!activeType" @click="openCreateInstance">部署实例</el-button>
-        </div>
-      </div>
-
-      <el-empty v-if="!loading && !projects.length" description="暂无项目，请先前往「项目管理」新建项目" :image-size="54" />
-      <el-empty v-else-if="!loading && activeProjectId && !environmentsInProject(activeProjectId).length" description="当前项目暂无环境，请先添加环境">
-        <el-button v-if="canManage" type="primary" :icon="Plus" @click="openCreateEnvironment">添加环境</el-button>
-      </el-empty>
-
-      <template v-else-if="activeEnvironmentId">
-        <!-- 服务类型 Tab 条 -->
-        <div class="type-tabs">
-          <button
-            v-for="type in typesInEnvironment(activeEnvironmentId)"
-            :key="type.id"
-            type="button"
-            class="type-tab"
-            :class="{ active: activeTypeId === type.id }"
-            @click="() => { activeTypeId = type.id; onTypeChange() }"
-          >
-            <span>{{ type.name }}</span>
-            <em>{{ countInType(type.id) }}</em>
-            <span v-if="canManage" class="type-tab-actions">
-              <el-icon class="type-tab-action" @click.stop="openEditType(type)"><Edit /></el-icon>
-              <el-icon class="type-tab-action danger" @click.stop="removeType(type)"><Delete /></el-icon>
-            </span>
+    <div class="services-page" v-loading="loading && !projects.length">
+      <aside class="project-rail">
+        <div class="rail-heading"><span>我的项目</span><span>{{ projects.length }}</span></div>
+        <nav class="project-navigation" aria-label="选择项目">
+          <button v-for="project in projects" :key="project.id" class="project-nav-item" :class="{ active: activeProjectId === project.id }" :aria-pressed="activeProjectId === project.id" @click="selectProject(project.id)">
+            <span class="project-initial">{{ project.name.slice(0, 1).toUpperCase() }}</span>
+            <span class="project-nav-name">{{ project.name }}</span>
+            <el-icon v-if="activeProjectId === project.id" class="project-chevron"><ArrowRight /></el-icon>
           </button>
-          <button v-if="canManage" type="button" class="type-tab-add" @click="openCreateType">
-            <el-icon><Plus /></el-icon><span>新建服务类型</span>
-          </button>
-          <span v-if="canManage" class="type-tab-env-actions">
-            <el-tooltip content="编辑当前环境" placement="top">
-              <el-icon class="env-manage-action" @click="activeEnvironment && openEditEnvironment(activeEnvironment)"><Edit /></el-icon>
-            </el-tooltip>
-            <el-tooltip content="删除当前环境" placement="top">
-              <el-icon class="env-manage-action danger" @click="activeEnvironment && removeEnvironment(activeEnvironment)"><Delete /></el-icon>
-            </el-tooltip>
-          </span>
+        </nav>
+        <div class="rail-footer"><el-button text :icon="FolderOpened" @click="router.push('/projects')">管理项目</el-button></div>
+      </aside>
+      <section class="service-workspace">
+        <div class="workspace-heading">
+          <div v-if="activeProject" class="environment-tabs" aria-label="选择环境">
+            <button v-for="env in environmentsInProject(activeProjectId)" :key="env.id" :class="{ active: activeEnvironmentId === env.id }" :aria-pressed="activeEnvironmentId === env.id" @click="selectEnvironment(env.id)">{{ env.name }}</button>
+          </div>
+          <div class="workspace-actions">
+            <el-dropdown v-if="canManage && activeProject" trigger="click">
+              <el-button text :icon="MoreFilled" aria-label="项目内资源管理">管理</el-button>
+              <template #dropdown><el-dropdown-menu>
+                <el-dropdown-item @click="openCreateEnvironment">新增环境</el-dropdown-item>
+                <el-dropdown-item v-if="activeEnvironment" @click="openEditEnvironment(activeEnvironment)">编辑当前环境</el-dropdown-item>
+                <el-dropdown-item v-if="activeEnvironment" @click="removeEnvironment(activeEnvironment)">删除当前环境</el-dropdown-item>
+                <el-dropdown-item v-if="activeEnvironment" divided @click="openCreateType">新增服务类型</el-dropdown-item>
+                <el-dropdown-item v-if="activeType" @click="openEditType(activeType)">编辑当前服务类型</el-dropdown-item>
+                <el-dropdown-item v-if="activeType" @click="removeType(activeType)">删除当前服务类型</el-dropdown-item>
+              </el-dropdown-menu></template>
+            </el-dropdown>
+            <el-button v-if="canManage" type="primary" :icon="Plus" :disabled="!typesInEnvironment(activeEnvironmentId).length" @click="openCreateInstance">部署实例</el-button>
+          </div>
         </div>
-
-        <el-empty v-if="!typesInEnvironment(activeEnvironmentId).length" description="当前环境暂无服务类型，请先新建服务类型" :image-size="54" />
-
-        <!-- 主体：左侧实例表格 + 右侧详情面板 -->
-        <div v-else-if="activeType" class="master-detail" v-loading="loading">
-          <section class="instance-panel">
-            <div class="instance-toolbar">
-              <span class="instance-toolbar-title">{{ activeType.name }}</span>
-              <span class="instance-toolbar-count">{{ filteredInstances.length }} 个实例 · {{ filteredInstances.filter(isHealthy).length }} 个健康</span>
-              <el-input v-model="keyword" :prefix-icon="Search" clearable placeholder="搜索实例、镜像或端口" class="instance-search" />
+        <el-alert v-if="loadError" title="数据加载失败，请重试；已有数据可能不是最新状态。" type="error" show-icon :closable="false" class="load-error" />
+        <el-empty v-if="!loading && !projects.length" :description="loadError ? '无法获取项目' : '暂无项目'" :image-size="60">
+          <el-button v-if="loadError" @click="loadAll">重试</el-button>
+          <el-button v-else-if="canManage" type="primary" @click="router.push('/projects')">创建项目</el-button>
+        </el-empty>
+        <el-empty v-else-if="!loading && activeProjectId && !environmentsInProject(activeProjectId).length" description="当前项目暂无环境" :image-size="60">
+          <el-button v-if="canManage" type="primary" :icon="Plus" @click="openCreateEnvironment">添加环境</el-button>
+        </el-empty>
+        <template v-else-if="activeEnvironmentId">
+          <div class="service-filter-bar">
+            <div class="type-tabs" aria-label="选择服务类型">
+              <button class="type-tab" :class="{ active: !activeTypeId }" :aria-pressed="!activeTypeId" @click="activeTypeId = ''; onTypeChange()">全部 <em>{{ environmentInstanceCount }}</em></button>
+              <button v-for="type in typesInEnvironment(activeEnvironmentId)" :key="type.id" class="type-tab" :class="{ active: activeTypeId === type.id }" :aria-pressed="activeTypeId === type.id" @click="activeTypeId = type.id; onTypeChange()">{{ type.name }} <em>{{ countInType(type.id) }}</em></button>
             </div>
-
-            <el-table
-              :data="filteredInstances"
-              class="instance-table"
-              height="100%"
-              highlight-current-row
-              :current-row-key="activeInstanceId"
-              row-key="id"
-              @row-click="openInstanceDetails"
-            >
-              <el-table-column label="实例" min-width="140">
-                <template #default="{ row }">
-                  <span class="instance-name">{{ row.name }}</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="状态" width="120">
-                <template #default="{ row }">
-                  <span class="status-dot-label"><span class="status-dot" :class="`status-${row.status}`"></span>{{ statusLabel(row) }}</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="镜像" min-width="200">
-                <template #default="{ row }"><span class="mono-text">{{ row.image }}</span></template>
-              </el-table-column>
-              <el-table-column label="主机 IP" min-width="176">
-                <template #default="{ row }">
-                  <div class="instance-host-ips">
-                    <span><i>内网</i>{{ hostById.get(row.host_id)?.internal_ip || '—' }}</span>
-                    <span><i>外网</i>{{ hostById.get(row.host_id)?.external_ip || '—' }}</span>
+            <el-input v-model="keyword" :prefix-icon="Search" clearable placeholder="搜索实例、镜像或备注" aria-label="搜索实例" class="instance-search" />
+          </div>
+          <el-empty v-if="!typesInEnvironment(activeEnvironmentId).length" description="当前环境暂无服务类型" :image-size="60">
+            <el-button v-if="canManage" :icon="Plus" @click="openCreateType">添加服务类型</el-button>
+          </el-empty>
+          <div v-else class="master-detail" v-loading="loading">
+            <section class="instance-panel">
+              <div class="mobile-instance-list">
+                <article v-for="row in filteredInstances" :key="row.id" class="mobile-instance">
+                  <div class="mobile-instance-heading">
+                    <button class="instance-name" @click="openInstanceDetails(row)">{{ row.name }}</button>
+                    <span class="status-dot-label" :class="`label-${row.status}`"><span class="status-dot"></span>{{ statusLabel(row) }}</span>
                   </div>
-                </template>
-              </el-table-column>
-              <el-table-column label="网络" width="120">
-                <template #default="{ row }">{{ row.network || '默认网络' }}</template>
-              </el-table-column>
-              <el-table-column label="端口" width="130">
-                <template #default="{ row }"><span class="mono-text">{{ row.port_mapping || '未映射' }}</span></template>
-              </el-table-column>
-              <el-table-column label="运行时长" width="100">
-                <template #default="{ row }">{{ row.status === 'running' ? formatRelativeTime(row.started_at) : '-' }}</template>
-              </el-table-column>
-              <el-table-column label="操作" width="150" fixed="right">
-                <template #default="{ row }">
-                  <div v-if="canManage" class="row-actions" @click.stop @dblclick.stop>
-                    <el-button link type="primary" @click="openUpdateImage(row)">更新</el-button>
-                    <el-button
-                      v-if="row.status === 'stopped'"
-                      link
-                      type="primary"
-                      :loading="actionLoadingId === row.id"
-                      @click="deployInstance(row)"
-                    >重新部署</el-button>
-                    <el-button
-                      v-else
-                      link
-                      type="primary"
-                      :disabled="row.status !== 'running' && row.status !== 'restarting'"
-                      :loading="actionLoadingId === row.id"
-                      @click="restartInstance(row)"
-                    >重启</el-button>
+                  <div class="instance-secondary" :title="row.image">{{ imageVersion(row.image) }}</div>
+                  <div class="mobile-instance-bottom">
+                    <span>{{ hostById.get(row.host_id)?.name || '未知主机' }}</span>
+                    <div class="row-actions">
+                      <el-button v-if="row.status !== 'not_deployed'" link type="primary" @click="openInstanceLogs(row)">日志</el-button>
+                      <el-button v-if="canManage && row.status === 'stopped'" link type="primary" :loading="actionLoadingId === row.id" @click="startInstance(row)">启动</el-button>
+                      <el-button v-else-if="canManage" link type="primary" @click="openUpdateImage(row)">更新</el-button>
+                      <el-button link @click="openInstanceDetails(row)">详情</el-button>
+                    </div>
                   </div>
-                </template>
-              </el-table-column>
-            </el-table>
-            <el-empty
-              v-if="!loading && !filteredInstances.length"
-              :description="visibleInstances.length ? '没有符合筛选条件的实例' : '该类型暂无实例，点击右上角部署实例'"
-              :image-size="60"
-            />
-          </section>
+                </article>
+                <el-empty v-if="!filteredInstances.length" :description="keyword ? '没有符合筛选条件的实例' : '暂无实例'" :image-size="45" />
+              </div>
+              <el-table :data="filteredInstances" class="instance-table" height="100%" highlight-current-row :current-row-key="activeInstanceId" row-key="id" @row-click="openInstanceDetails" :empty-text="keyword ? '没有符合筛选条件的实例' : '暂无实例，可点击右上角部署实例'">
+                <el-table-column label="实例" min-width="145">
+                  <template #default="{ row }"><div class="instance-identity"><span class="instance-box"><el-icon><Box /></el-icon></span><button class="instance-name" :title="row.name" @click.stop="openInstanceDetails(row)">{{ row.name }}</button></div></template>
+                </el-table-column>
+                <el-table-column label="运行状态" width="112">
+                  <template #default="{ row }"><span class="status-dot-label" :class="`label-${row.status}`"><span class="status-dot" :class="`status-${row.status}`"></span>{{ statusLabel(row) }}</span></template>
+                </el-table-column>
+                <el-table-column label="运行时长" width="105">
+                  <template #default="{ row }"><span>{{ runtimeDuration(row) }}</span></template>
+                </el-table-column>
+                <el-table-column label="镜像号" min-width="205">
+                  <template #default="{ row }"><span class="instance-image-cell" :title="row.container_image || row.image">{{ imageVersion(row.container_image || row.image) }}</span></template>
+                </el-table-column>
+                <el-table-column label="上次启动时间" width="165">
+                  <template #default="{ row }"><span>{{ latestStartedAt[row.id] ? formatDateTime(latestStartedAt[row.id]) : '—' }}</span></template>
+                </el-table-column>
+                <el-table-column label="部署主机" min-width="155">
+                  <template #default="{ row }"><div class="instance-host-inline" :title="`${hostById.get(row.host_id)?.name || '未知主机'} · ${hostById.get(row.host_id)?.internal_ip || hostById.get(row.host_id)?.external_ip || '未配置 IP'}`"><span>{{ hostById.get(row.host_id)?.name || '未知主机' }}</span><span class="instance-inline-secondary">{{ hostById.get(row.host_id)?.internal_ip || hostById.get(row.host_id)?.external_ip || '未配置 IP' }}</span></div></template>
+                </el-table-column>
+                <el-table-column label="操作" width="165" align="right" fixed="right">
+                  <template #default="{ row }"><div class="row-actions" @click.stop>
+                    <el-button v-if="row.status !== 'not_deployed'" link type="primary" @click="openInstanceLogs(row)">日志</el-button>
+                    <el-button v-if="canManage && row.status === 'stopped'" link type="primary" :loading="actionLoadingId === row.id" @click="startInstance(row)">启动</el-button>
+                    <el-button v-else-if="canManage" link type="primary" @click="openUpdateImage(row)">更新</el-button>
+                    <el-button link :icon="ArrowRight" :aria-label="`查看 ${row.name} 详情`" @click="openInstanceDetails(row)" />
+                  </div></template>
+                </el-table-column>
+              </el-table>
+              <div class="instance-list-footer"><span>{{ filteredInstances.length }} 个实例 · {{ filteredInstances.filter(isHealthy).length }} 个运行中</span><el-button text size="small" :icon="Refresh" :loading="loading" @click="refreshAll">刷新</el-button></div>
+            </section>
 
           <!-- 实例详情抽屉，与主机详情使用相同的右侧抽屉交互 -->
           <el-drawer
@@ -839,7 +907,11 @@ onUnmounted(stopStatusPolling)
                   </div>
                   <el-button class="detail-close-button" circle :icon="Close" aria-label="关闭实例详情" @click="detailVisible = false" />
                 </div>
-                <div v-if="canManage" class="detail-header-actions">
+                <div v-if="detailEditMode" class="detail-header-actions detail-edit-actions">
+                  <el-button size="small" @click="cancelInstanceEdit">取消</el-button>
+                  <el-button size="small" type="primary" :loading="instanceSubmitting" @click="saveInstance(true)">保存</el-button>
+                </div>
+                <div v-else-if="canManage" class="detail-header-actions">
                   <el-button v-if="activeInstance.status === 'not_deployed' || activeInstance.status === 'error'" size="small" type="primary" :icon="Upload" :loading="actionLoadingId === activeInstance.id" @click="deployInstance(activeInstance)">部署</el-button>
                   <el-button v-if="activeInstance.status === 'stopped'" size="small" type="success" plain :icon="VideoPlay" :loading="actionLoadingId === activeInstance.id" @click="startInstance(activeInstance)">启动</el-button>
                   <el-button v-if="activeInstance.status === 'stopped'" size="small" type="primary" :icon="Upload" :loading="actionLoadingId === activeInstance.id" @click="deployInstance(activeInstance)">重新部署</el-button>
@@ -891,7 +963,18 @@ onUnmounted(stopStatusPolling)
               </el-tab-pane>
 
               <el-tab-pane label="配置" name="config">
-                <div class="detail-scroll">
+                <el-form v-if="detailEditMode" class="detail-scroll instance-inline-editor" label-position="top">
+                  <div class="detail-section-title">编辑实例配置</div>
+                  <el-form-item label="部署主机" required><el-select v-model="instanceForm.host_id" style="width: 100%" placeholder="选择部署主机"><el-option v-for="host in instanceHostOptions" :key="host.id" :label="host.name" :value="host.id"><span>{{ host.name }}</span><span class="host-option-detail">{{ host.docker_host }}</span></el-option></el-select></el-form-item>
+                  <el-form-item label="实例名称" required><el-input v-model="instanceForm.name" placeholder="例如 game-1" /></el-form-item>
+                  <el-form-item label="镜像" required><el-input v-model="instanceForm.image" placeholder="镜像名称和标签" /></el-form-item>
+                  <el-form-item label="重启策略"><el-select v-model="instanceForm.restart_policy" style="width: 100%"><el-option label="不自动重启" value="no" /><el-option label="总是重启" value="always" /><el-option label="除非手动停止，否则重启" value="unless-stopped" /><el-option label="异常退出时重启" value="on-failure" /></el-select></el-form-item>
+                  <el-form-item label="网络"><el-input v-model="instanceForm.network" placeholder="留空使用默认网络" /></el-form-item>
+                  <el-form-item label="端口映射"><el-input v-model="instanceForm.port_mapping" placeholder="宿主机:容器，例如 9001:9001" /></el-form-item>
+                  <el-form-item label="环境变量 / 启动参数"><el-input v-model="instanceForm.env_text" type="textarea" :rows="10" class="env-vars-editor" placeholder="KEY=VALUE 或每行一个启动参数" /></el-form-item>
+                  <el-form-item label="备注"><el-input v-model="instanceForm.note" type="textarea" :rows="3" /></el-form-item>
+                </el-form>
+                <div v-else class="detail-scroll">
                   <div class="detail-section-title">部署配置</div>
                   <div class="detail-kv">
                     <div class="detail-kv-row"><span>服务类型</span><span>{{ activeType?.name }}</span></div>
@@ -956,7 +1039,8 @@ onUnmounted(stopStatusPolling)
             </div>
           </el-drawer>
         </div>
-      </template>
+        </template>
+      </section>
     </div>
 
     <!-- 环境表单 -->
@@ -1008,6 +1092,11 @@ onUnmounted(stopStatusPolling)
     <!-- 实例表单 -->
     <el-dialog v-model="instanceDialogVisible" :title="editingInstanceId ? '编辑实例' : '部署实例'" width="800px" destroy-on-close>
       <el-form label-width="90px">
+        <el-form-item label="服务类型" required>
+          <el-select v-model="instanceForm.service_type_id" :disabled="!!editingInstanceId" style="width: 100%" placeholder="选择服务类型">
+            <el-option v-for="type in typesInEnvironment(activeEnvironmentId)" :key="type.id" :label="type.name" :value="type.id" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="部署主机" required>
           <el-select v-model="instanceForm.host_id" placeholder="请选择 Docker 主机" style="width: 100%">
             <el-option v-for="host in instanceHostOptions" :key="host.id" :label="host.name" :value="host.id">
@@ -1085,205 +1174,58 @@ onUnmounted(stopStatusPolling)
 </template>
 
 <style scoped>
-.services-page {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-}
-
-/* -------- 顶部面包屑 + 筛选 -------- */
-.top-bar {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 16px;
-  margin-bottom: 14px;
-}
-
-.breadcrumb {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  min-width: 0;
-  font-size: 15px;
-  color: var(--ops-text-secondary);
-}
-
-.breadcrumb-sep { color: #c5ccd5; }
-.breadcrumb-current { color: var(--ops-text); font-weight: 600; }
-
-.top-bar-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-left: auto;
-}
-
-.top-bar-field {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.top-bar-field > span {
-  color: var(--ops-text-secondary);
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.top-bar-field .el-select { width: 140px; }
-
-/* -------- 服务类型 Tab 条 -------- */
-.type-tabs {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 14px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--ops-border);
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.type-tabs::-webkit-scrollbar { display: none; }
-
-.type-tab {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 0 0 auto;
-  height: 34px;
-  padding: 0 6px 0 14px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: #667287;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background .15s, color .15s;
-}
-
-.type-tab:hover { background: var(--ops-bg); color: var(--ops-text); }
-
-.type-tab.active {
-  background: var(--ops-primary-light);
-  color: var(--ops-primary);
-}
-
-.type-tab em {
-  display: grid;
-  min-width: 20px;
-  height: 20px;
-  padding: 0 5px;
-  place-items: center;
-  border-radius: 999px;
-  background: #eef2f6;
-  color: #778495;
-  font-size: 11px;
-  font-style: normal;
-}
-
-.type-tab.active em { background: var(--ops-primary); color: #fff; }
-
-.type-tab-actions { display: none; align-items: center; gap: 3px; margin-left: 2px; padding: 0 6px; }
-.type-tab:hover .type-tab-actions, .type-tab.active .type-tab-actions { display: flex; }
-.type-tab-action { font-size: 12px; opacity: .6; }
-.type-tab-action:hover { opacity: 1; }
-.type-tab-action.danger:hover { color: var(--el-color-danger); }
-
-.type-tab-add {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  flex: 0 0 auto;
-  height: 34px;
-  padding: 0 12px;
-  border: 1px dashed var(--ops-border);
-  border-radius: 8px;
-  background: transparent;
-  color: #9aa4b2;
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.type-tab-add:hover { border-color: #9fc8ff; color: var(--ops-primary); }
-
-.type-tab-env-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-left: auto;
-  padding-left: 10px;
-  color: #9aa4b2;
-  font-size: 13px;
-}
-
-.env-manage-action { cursor: pointer; }
-.env-manage-action:hover { color: var(--ops-primary); }
-.env-manage-action.danger:hover { color: var(--el-color-danger); }
-
-/* -------- 主体：左右分栏 -------- */
-.master-detail {
-  display: flex;
-  align-items: stretch;
-  flex: 1;
-  min-height: 0;
-  border: 1px solid var(--ops-border);
-  border-radius: 12px;
-  background: #fff;
-  box-shadow: 0 8px 28px rgba(31, 45, 61, .05);
-  overflow: hidden;
-}
-
-.instance-panel {
-  display: flex;
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.instance-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--ops-border);
-}
-
-.instance-toolbar-title { font-size: 15px; font-weight: 700; color: var(--ops-text); }
-.instance-toolbar-count { color: var(--ops-text-secondary); font-size: 12px; }
-.instance-search { width: 240px; margin-left: auto; }
-
-.instance-table { flex: 1; min-height: 0; }
-.instance-table :deep(.el-scrollbar__bar.is-vertical) { display: none; }
+.services-page { display: flex; flex: 1; min-width: 0; min-height: 0; overflow: hidden; background: #fff; }
+.project-rail { flex: 0 0 204px; width: 204px; display: flex; flex-direction: column; min-height: 0; padding: 25px 12px 16px; border-right: 1px solid var(--ops-border); background: #f7f9fc; }
+.rail-heading { display: flex; justify-content: space-between; padding: 0 12px 17px; color: var(--ops-text-secondary); font-size: 12px; }
+.project-navigation { min-height: 0; overflow-y: auto; }
+.project-nav-item { display: flex; align-items: center; width: 100%; gap: 10px; padding: 11px 10px; margin-bottom: 5px; border: 0; border-radius: 7px; background: transparent; color: var(--ops-text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.project-nav-item:hover { background: #eef2f8; }
+.project-nav-item.active { background: var(--ops-primary-light); color: var(--ops-primary); }
+.project-initial { display: grid; place-items: center; width: 28px; height: 28px; flex-shrink: 0; border: 1px solid var(--ops-border); border-radius: 6px; background: #fff; font-size: 12px; }
+.project-nav-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-chevron { margin-left: auto; flex-shrink: 0; font-size: 11px; }
+.rail-footer { margin-top: auto; padding-top: 20px; }
+.rail-footer .el-button { color: var(--ops-text-secondary); }
+.service-workspace { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 26px 30px 12px; }
+.workspace-heading { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; margin: -6px -8px 18px; padding: 16px 18px; border: 1px solid #e5ecf8; border-radius: 10px; background: linear-gradient(112deg, #f0f5ff 0%, #f8faff 58%, #f2f7ff 100%); flex-shrink: 0; }
+.environment-tabs { display: flex; align-items: center; gap: 3px; padding: 3px; background: var(--ops-bg); border-radius: 6px; max-width: 100%; overflow-x: auto; }
+.environment-tabs button { flex-shrink: 0; padding: 5px 12px; background: transparent; border: 0; border-radius: 4px; font: inherit; font-size: 12px; color: var(--ops-text-secondary); cursor: pointer; }
+.environment-tabs button.active { background: #fff; color: var(--ops-text); box-shadow: 0 1px 4px #17294512; }
+.workspace-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.service-filter-bar { display: flex; align-items: center; gap: 16px; border-bottom: 1px solid var(--ops-border); flex-shrink: 0; }
+.type-tabs { display: flex; min-width: 0; gap: 23px; overflow-x: auto; }
+.type-tab { display: flex; align-items: center; gap: 7px; flex-shrink: 0; padding: 11px 0 13px; background: transparent; border: 0; border-bottom: 2px solid transparent; color: var(--ops-text-secondary); font: inherit; font-size: 13px; cursor: pointer; }
+.type-tab.active { color: var(--ops-primary); border-bottom-color: var(--ops-primary); }
+.type-tab em { font-style: normal; font-size: 11px; padding: 1px 6px; background: var(--ops-bg); color: var(--ops-text-secondary); border-radius: 4px; }
+.instance-search { width: 205px; margin-left: auto; flex-shrink: 0; }
+.instance-search :deep(.el-input__wrapper) { box-shadow: none; }
+.master-detail { flex: 1; display: flex; min-height: 0; overflow: hidden; }
+.instance-panel { display: flex; flex: 1; min-width: 0; min-height: 0; flex-direction: column; }
+.mobile-instance-list { display: none; }
+.instance-table { flex: 1; min-height: 0; --el-table-header-bg-color: #fff; --el-table-row-hover-bg-color: #f8faff; }
+.instance-table :deep(th.el-table__cell) { font-weight: 400; font-size: 12px; color: var(--ops-text-secondary); padding: 13px 0; }
+.instance-table :deep(td.el-table__cell) { padding: 17px 0; }
 .instance-table :deep(.el-table__row) { cursor: pointer; }
-.instance-table :deep(.current-row td) { background: var(--ops-primary-light) !important; }
-.instance-table :deep(.el-table__row) { cursor: pointer; }
-.instance-name { font-weight: 600; color: var(--ops-text); }
-.mono-text { font-family: "SFMono-Regular", Consolas, Monaco, monospace; font-size: 12.5px; color: #52657a; }
-.instance-host-ips { display: flex; flex-direction: column; gap: 2px; color: #52657a; font-size: 12px; line-height: 1.35; }
-.instance-host-ips span { overflow-wrap: anywhere; }
-.instance-host-ips i { display: inline-block; width: 32px; color: var(--ops-text-secondary); font-size: 11px; font-style: normal; }
-
-.status-dot-label { display: inline-flex; align-items: center; gap: 6px; line-height: 1; }
-.status-dot { display: inline-block; width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: #c0c4cc; }
-.status-dot.status-running { background: #52c41a; box-shadow: 0 0 0 3px rgba(82, 196, 26, .14); }
-.status-dot.status-error { background: #f56c6c; }
-.status-dot.status-stopped, .status-dot.status-restarting { background: #e6a23c; }
-
-.row-actions { display: flex; align-items: center; gap: 10px; }
-.row-actions .el-button { margin-left: 0; padding: 0 2px; }
-.row-more { cursor: pointer; color: var(--ops-text-secondary); font-size: 16px; }
-.row-more:hover { color: var(--ops-primary); }
+.instance-table :deep(.current-row td) { background: var(--ops-primary-light); }
+.instance-identity { display: flex; align-items: center; gap: 12px; }
+.instance-box { display: grid; place-items: center; flex-shrink: 0; width: 34px; height: 36px; background: var(--ops-bg); color: var(--ops-text-secondary); border-radius: 6px; }
+.instance-identity-text { min-width: 0; }
+.instance-name { display: block; max-width: 100%; padding: 0; border: 0; background: transparent; font: inherit; font-size: 13px; font-weight: 600; color: var(--ops-text); cursor: pointer; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.instance-image-cell { display: block; overflow: hidden; color: var(--ops-text-secondary); font-family: "SFMono-Regular", Consolas, Monaco, monospace; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.status-inline, .instance-host-inline { display: flex; align-items: center; gap: 9px; min-width: 0; white-space: nowrap; }
+.instance-host-inline > span:first-child { overflow: hidden; text-overflow: ellipsis; }
+.instance-inline-secondary { overflow: hidden; color: var(--ops-text-secondary); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.instance-secondary { margin-top: 3px; font-size: 12px; color: var(--ops-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.status-dot-label { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 2px 7px; border-radius: 4px; background: var(--ops-bg); color: var(--ops-text-secondary); }
+.status-dot-label.label-running { color: var(--ops-success); background: #edf8f4; }
+.status-dot-label.label-error { color: var(--ops-danger); background: #fff0f1; }
+.status-dot-label.label-restarting { color: var(--ops-warning); background: #fff6e8; }
+.status-dot { display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+.row-actions .el-button { margin-left: 0; }
+.instance-list-footer { display: flex; align-items: center; justify-content: space-between; padding: 12px 0 0; font-size: 12px; color: var(--ops-text-secondary); }
+.mono-text { font-family: Consolas, monospace; font-size: 12px; color: #52657a; }
+.load-error { margin-bottom: 16px; flex-shrink: 0; }
 
 /* -------- 实例详情抽屉 -------- */
 :deep(.el-drawer__body) { padding: 0; overflow: hidden; }
@@ -1333,6 +1275,7 @@ onUnmounted(stopStatusPolling)
 .detail-close-button:hover { border-color: var(--ops-primary); background: var(--ops-primary-light); color: var(--ops-primary); }
 
 .detail-header-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; width: 100%; }
+.detail-edit-actions { justify-content: flex-end; }
 
 .detail-tabs { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .detail-tabs :deep(.el-tabs__header) { margin: 0; padding: 0 18px; }
@@ -1390,6 +1333,10 @@ onUnmounted(stopStatusPolling)
 }
 
 .edit-config-btn { width: 100%; margin-top: 20px; }
+.instance-inline-editor :deep(.el-form-item) { margin-bottom: 16px; }
+.instance-inline-editor :deep(.el-form-item__label) { padding-bottom: 6px; color: #52627a; font-size: 12px; font-weight: 600; }
+.instance-inline-editor :deep(.el-input__wrapper), .instance-inline-editor :deep(.el-select__wrapper) { min-height: 36px; border-radius: 7px; }
+.instance-inline-editor :deep(.el-textarea__inner) { font-family: "SFMono-Regular", Consolas, Monaco, monospace; font-size: 11px; line-height: 1.55; }
 
 :global(.danger-menu-item) { color: var(--el-color-danger); }
 
@@ -1438,14 +1385,33 @@ onUnmounted(stopStatusPolling)
 .logs-viewer-fill :deep(.el-textarea) { height: 100%; }
 .logs-viewer-fill :deep(textarea) { height: 100% !important; min-height: 0 !important; overflow: auto; resize: none; }
 
-@media (max-width: 900px) {
-  .services-page { min-height: 0; }
-  .top-bar { flex-direction: column; align-items: stretch; gap: 10px; }
-  .top-bar-actions { flex-wrap: wrap; margin-left: 0; }
-  .top-bar-field .el-select { flex: 1; width: auto; }
-  .instance-toolbar { flex-wrap: wrap; }
-  .instance-search { width: 100%; margin-left: 0; }
-  :deep(.el-dialog) { width: calc(100vw - 24px) !important; margin-top: 3vh !important; }
-  :deep(.el-drawer) { width: calc(100vw - 24px) !important; }
+@media (max-width: 1000px) {
+  .project-rail { flex-basis: 170px; width: 170px; }
+  .service-workspace { padding: 22px 20px 12px; }
+  .workspace-heading { gap: 12px; margin: -4px -4px 16px; padding: 14px; }
+  .service-filter-bar { flex-wrap: wrap; gap: 0; }
+  .type-tabs { width: 100%; }
+  .instance-search { width: 100%; margin: 4px 0; }
+}
+@media (max-width: 760px) {
+  .instance-table { display: none; }
+  .mobile-instance-list { display: block; flex: 1; min-height: 0; overflow-y: auto; }
+  .mobile-instance { padding: 17px 2px; border-bottom: 1px solid var(--ops-border); }
+  .mobile-instance-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+  .mobile-instance-heading .instance-name { overflow-wrap: anywhere; }
+  .mobile-instance .instance-secondary { margin-top: 7px; }
+  .mobile-instance-bottom { display: flex; justify-content: space-between; align-items: center; margin-top: 9px; gap: 10px; }
+  .mobile-instance-bottom > span { color: var(--ops-text-secondary); font-size: 12px; }
+  .services-page { flex-direction: column; }
+  .project-rail { flex: 0 0 auto; width: 100%; padding: 8px 12px; border-right: 0; border-bottom: 1px solid var(--ops-border); }
+  .rail-heading, .rail-footer, .project-initial, .project-chevron { display: none; }
+  .project-navigation { display: flex; gap: 6px; overflow-x: auto; }
+  .project-nav-item { width: auto; flex-shrink: 0; margin: 0; padding: 8px 12px; }
+  .project-nav-name { max-width: 160px; }
+  .service-workspace { padding: 16px 14px 10px; }
+  .workspace-heading { margin: -2px -2px 10px; padding: 12px; gap: 10px; }
+  .workspace-actions { margin-left: 0; }
+  .environment-tabs button { padding: 5px 8px; }
+  :deep(.el-drawer) { width: min(520px, 100vw) !important; }
 }
 </style>

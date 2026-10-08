@@ -25,6 +25,7 @@ type Repository interface {
 	List(ctx context.Context) ([]model.Host, error)
 	Get(ctx context.Context, id string) (model.Host, error)
 	Create(ctx context.Context, host model.Host) error
+	Update(ctx context.Context, host model.Host) error
 	Delete(ctx context.Context, id string) error
 	SetProjectHosts(ctx context.Context, projectID string, hostIDs []string) error
 }
@@ -63,6 +64,21 @@ func (r *MemoryRepository) Create(_ context.Context, host model.Host) error {
 	defer r.mu.Unlock()
 	for _, existing := range r.items {
 		if existing.Name == host.Name {
+			return ErrAlreadyExists
+		}
+	}
+	r.items[host.ID] = host
+	return nil
+}
+
+func (r *MemoryRepository) Update(_ context.Context, host model.Host) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.items[host.ID]; !ok {
+		return ErrNotFound
+	}
+	for id, existing := range r.items {
+		if id != host.ID && existing.Name == host.Name {
 			return ErrAlreadyExists
 		}
 	}
@@ -166,6 +182,20 @@ func (r *MongoRepository) Create(ctx context.Context, host model.Host) error {
 		return ErrAlreadyExists
 	}
 	return err
+}
+
+func (r *MongoRepository) Update(ctx context.Context, host model.Host) error {
+	result, err := r.collection().ReplaceOne(ctx, bson.M{"_id": host.ID}, host)
+	if err != nil {
+		if mongo.IsDuplicateKeyError(err) {
+			return ErrAlreadyExists
+		}
+		return err
+	}
+	if result.MatchedCount == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (r *MongoRepository) Delete(ctx context.Context, id string) error {

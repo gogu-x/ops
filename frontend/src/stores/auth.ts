@@ -6,6 +6,8 @@ export interface User {
   id: string
   username: string
   role: string
+  project_ids?: string[]
+  permissions?: string[]
   disabled: boolean
 }
 
@@ -21,6 +23,15 @@ export const useAuthStore = defineStore('auth', () => {
   const refreshToken = ref(localStorage.getItem('ops_refresh_token') || '')
   const user = ref<User | null>(JSON.parse(localStorage.getItem('ops_user') || 'null'))
   const isAuthenticated = computed(() => Boolean(accessToken.value))
+
+  function hasPermission(permission: string) {
+    if (user.value?.role === 'admin') return true
+    const permissions = user.value?.permissions || []
+    if (permissions.includes(permission)) return true
+    if (permission === 'services.view') return permissions.includes('services.manage')
+    if (permission === 'hosts.view') return permissions.includes('hosts.manage')
+    return false
+  }
 
   function save(data: TokenData) {
     accessToken.value = data.access_token
@@ -45,6 +56,17 @@ export const useAuthStore = defineStore('auth', () => {
     save(data.data)
   }
 
+  async function loadCurrentUser() {
+    if (!accessToken.value) return
+    try {
+      const { data } = await api.get('/me')
+      user.value = data.data
+      localStorage.setItem('ops_user', JSON.stringify(data.data))
+    } catch (error: any) {
+      if (error?.response?.status === 401) clear()
+    }
+  }
+
   async function logout() {
     try {
       if (refreshToken.value) await api.post('/auth/logout', { refresh_token: refreshToken.value })
@@ -53,5 +75,5 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  return { accessToken, refreshToken, user, isAuthenticated, login, logout, save, clear }
+  return { accessToken, refreshToken, user, isAuthenticated, hasPermission, login, loadCurrentUser, logout, save, clear }
 })

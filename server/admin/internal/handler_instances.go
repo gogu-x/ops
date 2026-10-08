@@ -10,20 +10,20 @@ import (
 )
 
 func (a *AdminService) registerInstanceRoutes(r *gin.RouterGroup) {
-	r.GET("/service-instances", a.listServiceInstances)
-	r.POST("/service-instances", requireRole("admin"), a.createServiceInstance)
-	r.PUT("/service-instances/:id", requireRole("admin"), a.updateServiceInstance)
-	r.DELETE("/service-instances/:id", requireRole("admin"), a.deleteServiceInstance)
-	r.GET("/service-instances/:id/status", a.serviceInstanceStatus)
-	r.GET("/service-instances/:id/detail", a.serviceInstanceDetail)
-	r.GET("/service-instances/:id/logs", a.serviceInstanceLogs)
-	r.GET("/service-instances/:id/events", a.serviceInstanceEvents)
-	r.POST("/service-instances/:id/deploy", requireRole("admin"), a.deployServiceInstance)
-	r.POST("/service-instances/:id/update-image", requireRole("admin"), a.updateServiceInstanceImage)
-	r.POST("/service-instances/:id/start", requireRole("admin"), a.startServiceInstance)
-	r.POST("/service-instances/:id/stop", requireRole("admin"), a.stopServiceInstance)
-	r.POST("/service-instances/:id/restart", requireRole("admin"), a.restartServiceInstance)
-	r.DELETE("/service-instances/:id/container", requireRole("admin"), a.removeServiceInstanceContainer)
+	r.GET("/service-instances", requireAnyPermission(model.PermissionServicesView, model.PermissionProjectsView), a.listServiceInstances)
+	r.POST("/service-instances", requirePermission(model.PermissionServicesManage), a.createServiceInstance)
+	r.PUT("/service-instances/:id", requirePermission(model.PermissionServicesManage), a.updateServiceInstance)
+	r.DELETE("/service-instances/:id", requirePermission(model.PermissionServicesManage), a.deleteServiceInstance)
+	r.GET("/service-instances/:id/status", requirePermission(model.PermissionServicesView), a.serviceInstanceStatus)
+	r.GET("/service-instances/:id/detail", requirePermission(model.PermissionServicesView), a.serviceInstanceDetail)
+	r.GET("/service-instances/:id/logs", requirePermission(model.PermissionServicesView), a.serviceInstanceLogs)
+	r.GET("/service-instances/:id/events", requirePermission(model.PermissionServicesView), a.serviceInstanceEvents)
+	r.POST("/service-instances/:id/deploy", requirePermission(model.PermissionServicesManage), a.deployServiceInstance)
+	r.POST("/service-instances/:id/update-image", requirePermission(model.PermissionServicesManage), a.updateServiceInstanceImage)
+	r.POST("/service-instances/:id/start", requirePermission(model.PermissionServicesManage), a.startServiceInstance)
+	r.POST("/service-instances/:id/stop", requirePermission(model.PermissionServicesManage), a.stopServiceInstance)
+	r.POST("/service-instances/:id/restart", requirePermission(model.PermissionServicesManage), a.restartServiceInstance)
+	r.DELETE("/service-instances/:id/container", requirePermission(model.PermissionServicesManage), a.removeServiceInstanceContainer)
 }
 
 func (a *AdminService) listServiceInstances(c *gin.Context) {
@@ -32,6 +32,25 @@ func (a *AdminService) listServiceInstances(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"ok": false, "error": err.Error()})
 		return
 	}
+	user := currentUser(c)
+	if user.Role != model.RoleAdmin {
+		types, typeErr := a.app.ListServiceTypes(c.Request.Context())
+		if typeErr != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"ok": false, "error": typeErr.Error()})
+			return
+		}
+		projectsByType := make(map[string]string, len(types))
+		for _, item := range types {
+			projectsByType[item.ID] = item.ProjectID
+		}
+		visible := items[:0]
+		for _, item := range items {
+			if user.HasProject(projectsByType[item.ServiceTypeID]) {
+				visible = append(visible, item)
+			}
+		}
+		items = visible
+	}
 	c.JSON(http.StatusOK, gin.H{"ok": true, "data": items})
 }
 
@@ -39,6 +58,9 @@ func (a *AdminService) createServiceInstance(c *gin.Context) {
 	var item model.ServiceInstance
 	if err := c.ShouldBindJSON(&item); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "invalid service instance request"})
+		return
+	}
+	if !allowServiceType(c, a, item.ServiceTypeID) {
 		return
 	}
 	created, err := a.app.CreateInstance(c.Request.Context(), item)
@@ -60,6 +82,9 @@ func (a *AdminService) updateServiceInstance(c *gin.Context) {
 		return
 	}
 	item.ID = c.Param("id")
+	if !allowInstance(c, a, item.ID) || !allowServiceType(c, a, item.ServiceTypeID) {
+		return
+	}
 	updated, err := a.app.UpdateInstance(c.Request.Context(), item)
 	if err != nil {
 		status := http.StatusBadRequest
@@ -75,6 +100,9 @@ func (a *AdminService) updateServiceInstance(c *gin.Context) {
 }
 
 func (a *AdminService) deleteServiceInstance(c *gin.Context) {
+	if !allowInstance(c, a, c.Param("id")) {
+		return
+	}
 	err := a.app.DeleteInstance(c.Request.Context(), c.Param("id"))
 	if err != nil {
 		status := http.StatusBadRequest
@@ -88,6 +116,9 @@ func (a *AdminService) deleteServiceInstance(c *gin.Context) {
 }
 
 func (a *AdminService) deployServiceInstance(c *gin.Context) {
+	if !allowInstance(c, a, c.Param("id")) {
+		return
+	}
 	result, err := a.app.DeployInstance(c.Request.Context(), c.Param("id"))
 	if err != nil {
 		writeInstanceGatewayError(c, err)
@@ -97,9 +128,10 @@ func (a *AdminService) deployServiceInstance(c *gin.Context) {
 }
 
 func (a *AdminService) updateServiceInstanceImage(c *gin.Context) {
-	var req struct {
-		Image string `json:"image" binding:"required"`
+	if !allowInstance(c, a, c.Param("id")) {
+		return
 	}
+	var req model.UpdateServiceInstanceImageRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "invalid request: image is required"})
 		return
@@ -129,6 +161,9 @@ func (a *AdminService) restartServiceInstance(c *gin.Context) {
 }
 
 func (a *AdminService) instanceContainerAction(c *gin.Context, action string) {
+	if !allowInstance(c, a, c.Param("id")) {
+		return
+	}
 	err := a.app.ContainerAction(c.Param("id"), action)
 	if err != nil {
 		writeInstanceGatewayError(c, err)
@@ -138,6 +173,9 @@ func (a *AdminService) instanceContainerAction(c *gin.Context, action string) {
 }
 
 func (a *AdminService) removeServiceInstanceContainer(c *gin.Context) {
+	if !allowInstance(c, a, c.Param("id")) {
+		return
+	}
 	err := a.app.RemoveContainer(c.Param("id"))
 	if err != nil {
 		writeInstanceGatewayError(c, err)
@@ -147,6 +185,9 @@ func (a *AdminService) removeServiceInstanceContainer(c *gin.Context) {
 }
 
 func (a *AdminService) serviceInstanceStatus(c *gin.Context) {
+	if !allowInstance(c, a, c.Param("id")) {
+		return
+	}
 	result, err := a.app.InstanceStatus(c.Param("id"))
 	if err != nil {
 		writeInstanceGatewayError(c, err)
@@ -156,6 +197,9 @@ func (a *AdminService) serviceInstanceStatus(c *gin.Context) {
 }
 
 func (a *AdminService) serviceInstanceDetail(c *gin.Context) {
+	if !allowInstance(c, a, c.Param("id")) {
+		return
+	}
 	result, err := a.app.InstanceDetail(c.Param("id"))
 	if err != nil {
 		writeInstanceGatewayError(c, err)
@@ -165,6 +209,9 @@ func (a *AdminService) serviceInstanceDetail(c *gin.Context) {
 }
 
 func (a *AdminService) serviceInstanceLogs(c *gin.Context) {
+	if !allowInstance(c, a, c.Param("id")) {
+		return
+	}
 	result, err := a.app.InstanceLogs(c.Param("id"), c.DefaultQuery("tail", "200"))
 	if err != nil {
 		writeInstanceGatewayError(c, err)
@@ -174,6 +221,9 @@ func (a *AdminService) serviceInstanceLogs(c *gin.Context) {
 }
 
 func (a *AdminService) serviceInstanceEvents(c *gin.Context) {
+	if !allowInstance(c, a, c.Param("id")) {
+		return
+	}
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
 	result, err := a.app.InstanceEvents(c.Param("id"), limit)
 	if err != nil {

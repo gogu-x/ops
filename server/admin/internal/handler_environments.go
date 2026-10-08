@@ -10,10 +10,10 @@ import (
 )
 
 func (a *AdminService) registerEnvironmentRoutes(r *gin.RouterGroup) {
-	r.GET("/environments", a.listEnvironments)
-	r.POST("/environments", requireRole("admin"), a.createEnvironment)
-	r.PUT("/environments/:id", requireRole("admin"), a.updateEnvironment)
-	r.DELETE("/environments/:id", requireRole("admin"), a.deleteEnvironment)
+	r.GET("/environments", requireAnyPermission(model.PermissionServicesView, model.PermissionProjectsView), a.listEnvironments)
+	r.POST("/environments", requirePermission(model.PermissionServicesManage), a.createEnvironment)
+	r.PUT("/environments/:id", requirePermission(model.PermissionServicesManage), a.updateEnvironment)
+	r.DELETE("/environments/:id", requirePermission(model.PermissionServicesManage), a.deleteEnvironment)
 }
 
 func (a *AdminService) listEnvironments(c *gin.Context) {
@@ -22,6 +22,16 @@ func (a *AdminService) listEnvironments(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"ok": false, "error": err.Error()})
 		return
 	}
+	user := currentUser(c)
+	if user.Role != model.RoleAdmin {
+		visible := items[:0]
+		for _, item := range items {
+			if user.HasProject(item.ProjectID) {
+				visible = append(visible, item)
+			}
+		}
+		items = visible
+	}
 	c.JSON(http.StatusOK, gin.H{"ok": true, "data": items})
 }
 
@@ -29,6 +39,9 @@ func (a *AdminService) createEnvironment(c *gin.Context) {
 	var item model.Environment
 	if err := c.ShouldBindJSON(&item); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "invalid environment request"})
+		return
+	}
+	if !allowProject(c, item.ProjectID) {
 		return
 	}
 	created, err := a.app.CreateEnvironment(c.Request.Context(), item)
@@ -50,6 +63,9 @@ func (a *AdminService) updateEnvironment(c *gin.Context) {
 		return
 	}
 	item.ID = c.Param("id")
+	if !allowEnvironment(c, a, item.ID) || !allowProject(c, item.ProjectID) {
+		return
+	}
 	updated, err := a.app.UpdateEnvironment(c.Request.Context(), item)
 	if err != nil {
 		status := http.StatusBadRequest
@@ -65,6 +81,9 @@ func (a *AdminService) updateEnvironment(c *gin.Context) {
 }
 
 func (a *AdminService) deleteEnvironment(c *gin.Context) {
+	if !allowEnvironment(c, a, c.Param("id")) {
+		return
+	}
 	err := a.app.DeleteEnvironment(c.Request.Context(), c.Param("id"))
 	if err != nil {
 		status := http.StatusBadRequest

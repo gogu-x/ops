@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +22,9 @@ type Repository interface {
 	FindUser(ctx context.Context, username string) (model.User, error)
 	FindUserByID(ctx context.Context, id string) (model.User, error)
 	CreateUser(ctx context.Context, user model.User) error
+	ListUsers(ctx context.Context) ([]model.User, error)
+	UpdateUser(ctx context.Context, user model.User) error
+	SetUserPasswordHash(ctx context.Context, id, passwordHash string) error
 	CountUsers(ctx context.Context) (int64, error)
 	SaveRefreshToken(ctx context.Context, token model.RefreshToken) error
 	ConsumeRefreshToken(ctx context.Context, tokenHash string, now time.Time) (model.RefreshToken, error)
@@ -74,6 +78,44 @@ func (r *MemoryRepository) CreateUser(_ context.Context, user model.User) error 
 	return nil
 }
 
+func (r *MemoryRepository) ListUsers(context.Context) ([]model.User, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	users := make([]model.User, 0, len(r.usersByID))
+	for _, user := range r.usersByID {
+		users = append(users, user)
+	}
+	sort.Slice(users, func(i, j int) bool { return users[i].CreatedAt.Before(users[j].CreatedAt) })
+	return users, nil
+}
+
+func (r *MemoryRepository) UpdateUser(_ context.Context, user model.User) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.usersByID[user.ID]; !ok {
+		return ErrNotFound
+	}
+	for id, existing := range r.usersByID {
+		if id != user.ID && existing.Username == user.Username {
+			return ErrAlreadyExists
+		}
+	}
+	r.usersByID[user.ID] = user
+	return nil
+}
+
+func (r *MemoryRepository) SetUserPasswordHash(_ context.Context, id, passwordHash string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	user, ok := r.usersByID[id]
+	if !ok {
+		return ErrNotFound
+	}
+	user.PasswordHash = passwordHash
+	r.usersByID[id] = user
+	return nil
+}
+
 func (r *MemoryRepository) CountUsers(context.Context) (int64, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -103,6 +145,14 @@ func (r *MemoryRepository) ConsumeRefreshToken(_ context.Context, tokenHash stri
 type MongoRepository struct{ db *mongo.Database }
 
 func NewMongoRepository(db *mongo.Database) *MongoRepository { return &MongoRepository{db: db} }
+
+func (r *MongoRepository) EnsureIndexes(ctx context.Context) error {
+	_, err := r.users().Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "username", Value: 1}},
+		Options: options.Index().SetUnique(true).SetName("username_unique"),
+	})
+	return err
+}
 
 func (r *MongoRepository) users() *mongo.Collection         { return r.db.Collection("users") }
 func (r *MongoRepository) refreshTokens() *mongo.Collection { return r.db.Collection("refresh_tokens") }
@@ -137,6 +187,47 @@ func (r *MongoRepository) CreateUser(ctx context.Context, user model.User) error
 		return ErrAlreadyExists
 	}
 	return err
+}
+
+func (r *MongoRepository) ListUsers(ctx context.Context) ([]model.User, error) {
+	cursor, err := r.users().Find(ctx, bson.M{}, options.Find().SetSort(bson.D{{Key: "created_at", Value: 1}}))
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	users := make([]model.User, 0)
+	if err := cursor.All(ctx, &users); err != nil {
+		return nil, err
+	}
+	return users, nil
+}
+
+func (r *MongoRepository) UpdateUser(ctx context.Context, user model.User) error {
+	result, err := r.users().UpdateOne(ctx, bson.M{"_id": user.ID}, bson.M{"$set": bson.M{
+		"username": user.Username, "role": user.Role, "project_ids": user.ProjectIDs,
+		"permissions": user.Permissions, "disabled": user.Disabled,
+	}})
+	if err != nil {
+		if mongo.IsDuplicateKeyError(err) {
+			return ErrAlreadyExists
+		}
+		return err
+	}
+	if result.MatchedCount == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (r *MongoRepository) SetUserPasswordHash(ctx context.Context, id, passwordHash string) error {
+	result, err := r.users().UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{"password_hash": passwordHash}})
+	if err != nil {
+		return err
+	}
+	if result.MatchedCount == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (r *MongoRepository) CountUsers(ctx context.Context) (int64, error) {

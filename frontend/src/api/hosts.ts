@@ -17,6 +17,7 @@ export interface Host {
 }
 
 export interface HostForm {
+  project_ids?: string[]
   name: string
   internal_ip: string
   external_ip: string
@@ -39,8 +40,18 @@ export const hostApi = {
     return response.data.data || []
   },
 
+  async configuration(id: string): Promise<Host> {
+    const response = await api.get<ApiResponse<Host>>(`/hosts/${encodeURIComponent(id)}/config`)
+    return response.data.data
+  },
+
   async create(form: HostForm): Promise<Host> {
     const response = await api.post<ApiResponse<Host>>('/hosts', form)
+    return response.data.data
+  },
+
+  async update(id: string, form: HostForm): Promise<Host> {
+    const response = await api.put<ApiResponse<Host>>(`/hosts/${encodeURIComponent(id)}`, form)
     return response.data.data
   },
 
@@ -50,5 +61,9 @@ export const hostApi = {
 
   async test(id: string): Promise<void> {
     await api.post<ApiResponse<unknown>>(`/hosts/${encodeURIComponent(id)}/test`)
+  },
+
+  async testConfiguration(id: string, form: HostForm): Promise<void> {
+    await api.post<ApiResponse<unknown>>(`/hosts/${encodeURIComponent(id)}/test-connection`, form)
   },
 }

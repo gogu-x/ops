@@ -57,8 +57,32 @@ func (s *Service) ListHosts() ([]model.Host, error) {
 	return result.Hosts, nil
 }
 
+func (s *Service) GetHostConfiguration(id string) (model.Host, error) {
+	value, err := s.gateway.Request("ops-host", model.GetHostConfigurationRequest{ID: id})
+	if err != nil {
+		return model.Host{}, err
+	}
+	result, ok := value.(model.Host)
+	if !ok {
+		return model.Host{}, errors.New("invalid host actor response")
+	}
+	return result, nil
+}
+
 func (s *Service) CreateHost(item model.Host) (model.Host, error) {
 	value, err := s.gateway.Request("ops-host", model.CreateRequest{Host: item})
+	if err != nil {
+		return model.Host{}, err
+	}
+	result, ok := value.(model.Host)
+	if !ok {
+		return model.Host{}, errors.New("invalid host actor response")
+	}
+	return result, nil
+}
+
+func (s *Service) UpdateHost(item model.Host) (model.Host, error) {
+	value, err := s.gateway.Request("ops-host", model.UpdateRequest{Host: item})
 	if err != nil {
 		return model.Host{}, err
 	}
@@ -164,6 +188,18 @@ func (s *Service) SetProjectHosts(ctx context.Context, projectID string, hostIDs
 
 func (s *Service) TestHost(id string) (model.TestResponse, error) {
 	value, err := s.gateway.Request("ops-host", model.TestRequest{ID: id})
+	if err != nil {
+		return model.TestResponse{}, err
+	}
+	result, ok := value.(model.TestResponse)
+	if !ok {
+		return model.TestResponse{}, errors.New("invalid host actor response")
+	}
+	return result, nil
+}
+
+func (s *Service) TestHostConnection(host model.Host) (model.TestResponse, error) {
+	value, err := s.gateway.Request("ops-host", model.TestHostConnectionRequest{Host: host})
 	if err != nil {
 		return model.TestResponse{}, err
 	}

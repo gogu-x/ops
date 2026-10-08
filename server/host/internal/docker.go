@@ -61,6 +61,24 @@ func (m *DockerManager) Test(ctx context.Context, host model.Host) (map[string]s
 	return map[string]string{"version": version.Version, "api_version": version.APIVersion, "os": version.Os, "arch": version.Arch}, nil
 }
 
+// TestConnection validates a proposed host configuration without reusing a
+// cached client created from an older TLS certificate or Docker endpoint.
+func (m *DockerManager) TestConnection(ctx context.Context, host model.Host) (map[string]string, error) {
+	cli, err := newClient(host)
+	if err != nil {
+		return nil, err
+	}
+	defer cli.Close()
+	if _, err := cli.Ping(ctx); err != nil {
+		return nil, err
+	}
+	version, err := cli.ServerVersion(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{"version": version.Version, "api_version": version.APIVersion, "os": version.Os, "arch": version.Arch}, nil
+}
+
 // ContainerList returns containers managed by the ops platform on the given
 // host (identified by the OpsContainerLabel label), including stopped ones.
 func (m *DockerManager) ContainerList(ctx context.Context, h model.Host) ([]types.Container, error) {

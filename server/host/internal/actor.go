@@ -37,14 +37,8 @@ func (a *DockerService) OnStop(_ tree.Context) {
 }
 
 func (a *DockerService) create(host model.Host) (model.Host, error) {
-	if host.Name == "" {
-		return model.Host{}, errors.New("host name is required")
-	}
-	if !strings.HasPrefix(strings.TrimSpace(host.DockerHost), "tcp://") {
-		return model.Host{}, errors.New("docker_host must use tcp://")
-	}
-	if !strings.HasSuffix(strings.TrimSpace(host.DockerHost), ":2376") {
-		return model.Host{}, errors.New("docker_host must use TCP port 2376")
+	if err := validateHostConfiguration(host); err != nil {
+		return model.Host{}, err
 	}
 	if strings.TrimSpace(host.TLSCA) == "" || strings.TrimSpace(host.TLSCert) == "" || strings.TrimSpace(host.TLSKey) == "" {
 		// TLS material is optional: Docker TLS remains enabled, while the
@@ -60,6 +54,37 @@ func (a *DockerService) create(host model.Host) (model.Host, error) {
 		return model.Host{}, err
 	}
 	return host, nil
+}
+
+func (a *DockerService) update(host model.Host) (model.Host, error) {
+	existing, err := a.repo.Get(context.Background(), host.ID)
+	if err != nil {
+		return model.Host{}, err
+	}
+	if err := validateHostConfiguration(host); err != nil {
+		return model.Host{}, err
+	}
+	host.ProjectID = existing.ProjectID
+	host.ProjectIDs = existing.ProjectIDs
+	host.CreatedAt = existing.CreatedAt
+	host.UpdatedAt = time.Now().UTC()
+	if err := a.repo.Update(context.Background(), host); err != nil {
+		return model.Host{}, err
+	}
+	return host, nil
+}
+
+func validateHostConfiguration(host model.Host) error {
+	if strings.TrimSpace(host.Name) == "" {
+		return errors.New("host name is required")
+	}
+	if !strings.HasPrefix(strings.TrimSpace(host.DockerHost), "tcp://") {
+		return errors.New("docker_host must use tcp://")
+	}
+	if !strings.HasSuffix(strings.TrimSpace(host.DockerHost), ":2376") {
+		return errors.New("docker_host must use TCP port 2376")
+	}
+	return nil
 }
 
 func (a *DockerService) delete(id string) error {
@@ -84,6 +109,19 @@ func (a *DockerService) test(id string) (model.TestResponse, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	info, err := a.docker.Test(ctx, host)
+	if err != nil {
+		return model.TestResponse{}, err
+	}
+	return model.TestResponse{Host: publicHost(host), Docker: info}, nil
+}
+
+func (a *DockerService) testConnection(host model.Host) (model.TestResponse, error) {
+	if err := validateHostConfiguration(host); err != nil {
+		return model.TestResponse{}, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	info, err := a.docker.TestConnection(ctx, host)
 	if err != nil {
 		return model.TestResponse{}, err
 	}

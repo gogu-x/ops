@@ -2,19 +2,40 @@
   box-sizing: border-box;
 }
 
+html {
+  scrollbar-width: none;
+}
+
+*::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
 :root {
-  --ops-bg: #f0f2f5;
+  --ops-bg: #f5f7fb;
   --ops-sider-bg: #001529;
-  --ops-primary: #1677ff;
-  --ops-primary-light: #e6f4ff;
-  --ops-border: #e5e7eb;
-  --ops-text: #1f2329;
-  --ops-text-secondary: #8c8c8c;
-  --ops-success: #52c41a;
-  --ops-warning: #faad14;
-  --ops-danger: #ff4d4f;
+  --ops-primary: #386be8;
+  --ops-primary-light: #edf2ff;
+  --ops-border: #e7ecf3;
+  --ops-text: #223147;
+  --ops-text-secondary: #718096;
+  --ops-success: #269879;
+  --ops-warning: #bf8728;
+  --ops-danger: #d65360;
+  --el-color-primary: #386be8;
+  --el-color-primary-light-3: #7498f0;
+  --el-color-primary-light-5: #9cb5f4;
+  --el-color-primary-light-7: #c3d3f8;
+  --el-color-primary-light-8: #d7e1fb;
+  --el-color-primary-light-9: #edf2ff;
+  --el-color-primary-dark-2: #2d56ba;
+  --el-color-success: #269879;
+  --el-color-warning: #bf8728;
+  --el-color-danger: #d65360;
+  --el-border-color-lighter: #e7ecf3;
   --ops-radius: 8px;
-  --ops-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.03), 0 1px 6px -1px rgba(0, 0, 0, 0.02), 0 2px 4px 0 rgba(0, 0, 0, 0.02);
+  --ops-shadow: 0 2px 8px rgba(28, 47, 78, 0.025);
 }
 
 html,
@@ -28,6 +49,61 @@ body,
 
 body {
   background: var(--ops-bg);
+}
+
+/* Use one calm, branded loading state across every Element Plus v-loading region. */
+.el-loading-mask {
+  background-color: rgba(255, 255, 255, .78);
+  backdrop-filter: blur(2px);
+}
+
+.el-loading-spinner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.el-loading-spinner .circular {
+  width: 34px;
+  height: 34px;
+  animation: ops-loading-spin 1s linear infinite;
+}
+
+.el-loading-spinner .path {
+  stroke: var(--ops-primary);
+  stroke-width: 3.5;
+  stroke-linecap: round;
+}
+
+.el-loading-spinner::after {
+  content: "加载中...";
+  display: block;
+  margin-top: 9px;
+  color: var(--ops-text-secondary);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.page-content-loading {
+  min-width: 0;
+  min-height: calc(100dvh - 56px);
+}
+
+@media (max-width: 760px) {
+  .page-content-loading {
+    min-height: calc(100dvh - 162px - env(safe-area-inset-bottom));
+  }
+}
+
+@media (max-width: 480px) {
+  .page-content-loading {
+    min-height: calc(100dvh - 158px - env(safe-area-inset-bottom));
+  }
+}
+
+@keyframes ops-loading-spin {
+  to { transform: rotate(360deg); }
 }
 
 /* Keep every dialog near the top of the viewport and scroll long forms inside
@@ -54,6 +130,23 @@ body {
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
+}
+
+/* Hide modal scrollbars without disabling wheel, touch, or keyboard scrolling. */
+.el-overlay-dialog,
+.el-overlay-dialog *,
+.el-dialog,
+.el-dialog__body {
+  scrollbar-width: none;
+}
+
+.el-overlay-dialog::-webkit-scrollbar,
+.el-overlay-dialog *::-webkit-scrollbar,
+.el-dialog::-webkit-scrollbar,
+.el-dialog__body::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 @supports (height: 100dvh) {
@@ -173,6 +266,11 @@ body {
   color: var(--ops-text-secondary);
   font-size: 13px;
   max-width: 640px;
+}
+
+.page-heading-actions-only {
+  justify-content: flex-end;
+  align-items: center;
 }
 
 /* ---------- Cards ---------- */
@@ -308,6 +406,7 @@ body {
   }
 
   .page-heading { flex-direction: column; margin-bottom: 14px; }
+  .page-heading-actions-only { flex-direction: row; align-items: center; }
   .page-heading h2 { font-size: 19px; }
   .auth-page { padding: 24px 0; }
   .login-card :deep(.el-card__body) { padding: 32px 22px 26px; }
