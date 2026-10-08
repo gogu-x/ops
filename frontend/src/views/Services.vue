@@ -414,14 +414,20 @@ function runtimeDuration(row: ServiceInstance) {
   if (row.status !== 'running') return '—'
   const match = row.status_text?.match(/^Up\s+(.+?)(?:\s+\(.*\))?$/i)
   if (!match) return '—'
-  return match[1]
+  const rawDuration = match[1].trim()
+  const approximate = /^about\s+/i.test(rawDuration)
+  return rawDuration
+    .replace(/^about\s+/i, '')
+    .replace(/^an?\s+(second|minute|hour|day|week|month|year)\b/i, '1 $1')
     .replace(/less than a second/i, '不足 1 秒')
     .replace(/(\d+)\s+years?/gi, '$1 年')
     .replace(/(\d+)\s+weeks?/gi, '$1 周')
+    .replace(/(\d+)\s+months?/gi, '$1 个月')
     .replace(/(\d+)\s+days?/gi, '$1 天')
     .replace(/(\d+)\s+hours?/gi, '$1 小时')
     .replace(/(\d+)\s+minutes?/gi, '$1 分钟')
     .replace(/(\d+)\s+seconds?/gi, '$1 秒')
+    .replace(/^(.+)$/, (duration) => `${approximate ? '约 ' : ''}${duration}`)
 }
 
 const startEventTypes = new Set(['deploy_succeeded', 'update_image_succeeded', 'container_started', 'container_restarted'])
@@ -868,8 +874,8 @@ onUnmounted(() => {
                 <el-table-column label="运行时长" width="105">
                   <template #default="{ row }"><span>{{ runtimeDuration(row) }}</span></template>
                 </el-table-column>
-                <el-table-column label="镜像号" min-width="205">
-                  <template #default="{ row }"><span class="instance-image-cell" :title="row.container_image || row.image">{{ imageVersion(row.container_image || row.image) }}</span></template>
+                <el-table-column label="镜像版本" min-width="205">
+                  <template #default="{ row }"><span class="instance-image-cell" :title="row.image">{{ imageVersion(row.image) }}</span></template>
                 </el-table-column>
                 <el-table-column label="上次启动时间" width="165">
                   <template #default="{ row }"><span>{{ latestStartedAt[row.id] ? formatDateTime(latestStartedAt[row.id]) : '—' }}</span></template>

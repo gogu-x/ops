@@ -78,11 +78,11 @@ func TestManagedUsersRequireScopeAndProtectLastAdmin(t *testing.T) {
 		t.Fatal("the last enabled admin should not be demoted")
 	}
 
-	created, err := service.CreateManagedUser(ctx, model.User{Username: "viewer", Role: model.RoleUser, ProjectIDs: []string{"project-a"}, Permissions: []string{model.PermissionServicesManage}}, "viewer-password")
+	created, err := service.CreateManagedUser(ctx, model.User{Username: "viewer", Role: model.RoleUser, ProjectIDs: []string{"project-a"}, Permissions: []string{model.PermissionServicesManage, model.PermissionDashboardView}}, "viewer-password")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !created.HasProject("project-a") || !created.HasPermission(model.PermissionServicesView) {
+	if !created.HasProject("project-a") || !created.HasPermission(model.PermissionServicesView) || !created.HasPermission(model.PermissionDashboardView) {
 		t.Fatalf("managed user access not normalized: %#v", created)
 	}
 	if _, err := service.CreateManagedUser(ctx, model.User{Username: "viewer", Role: model.RoleUser, ProjectIDs: []string{"project-a"}, Permissions: []string{model.PermissionProjectsView}}, "viewer-password"); err == nil {

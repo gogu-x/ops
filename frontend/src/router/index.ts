@@ -6,6 +6,16 @@ import Services from '../views/Services.vue'
 import Projects from '../views/Projects.vue'
 import Permissions from '../views/Permissions.vue'
 
+function defaultPathForUser(user: { role?: string; permissions?: string[] }) {
+  if (user.role === 'admin') return '/'
+  const permissions = user.permissions || []
+  if (permissions.includes('dashboard.view')) return '/'
+  if (permissions.includes('services.view') || permissions.includes('services.manage')) return '/services'
+  if (permissions.includes('projects.view')) return '/projects'
+  if (permissions.includes('hosts.view') || permissions.includes('hosts.manage')) return '/hosts'
+  return '/login'
+}
+
 const router = createRouter({
   history: createWebHistory(),
   routes: [
@@ -20,18 +30,18 @@ const router = createRouter({
 
 router.beforeEach((to) => {
   if (!to.meta.public && !localStorage.getItem('ops_access_token')) return '/login'
-  if (to.path === '/login' && localStorage.getItem('ops_access_token')) return '/'
+  let user: { role?: string; permissions?: string[] }
+  try { user = JSON.parse(localStorage.getItem('ops_user') || '{}') } catch { user = {} }
+  if (to.path === '/login' && localStorage.getItem('ops_access_token')) return defaultPathForUser(user)
+  if (to.path === '/' && user.role !== 'admin' && !user.permissions?.includes('dashboard.view')) return defaultPathForUser(user)
   if (to.path === '/permissions') {
-    try { if (JSON.parse(localStorage.getItem('ops_user') || '{}').role !== 'admin') return '/' } catch { return '/login' }
+    if (user.role !== 'admin') return defaultPathForUser(user)
   }
   if (to.path === '/services' || to.path === '/projects' || to.path === '/hosts') {
-    try {
-      const user = JSON.parse(localStorage.getItem('ops_user') || '{}')
-      const permissions = user.role === 'admin' ? ['services.view', 'projects.view', 'hosts.view'] : (user.permissions || [])
-      const required = to.path === '/services' ? 'services.view' : to.path === '/projects' ? 'projects.view' : 'hosts.view'
-      const allowed = permissions.includes(required) || (required === 'services.view' && permissions.includes('services.manage')) || (required === 'hosts.view' && permissions.includes('hosts.manage'))
-      if (!allowed) return '/'
-    } catch { return '/login' }
+    const permissions = user.role === 'admin' ? ['services.view', 'projects.view', 'hosts.view'] : (user.permissions || [])
+    const required = to.path === '/services' ? 'services.view' : to.path === '/projects' ? 'projects.view' : 'hosts.view'
+    const allowed = permissions.includes(required) || (required === 'services.view' && permissions.includes('services.manage')) || (required === 'hosts.view' && permissions.includes('hosts.manage'))
+    if (!allowed) return defaultPathForUser(user)
   }
 })
 

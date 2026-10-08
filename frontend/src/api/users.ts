@@ -1,6 +1,6 @@
 import api from './client'
 
-export type UserPermission = 'projects.view' | 'services.view' | 'services.manage' | 'hosts.view' | 'hosts.manage'
+export type UserPermission = 'dashboard.view' | 'projects.view' | 'services.view' | 'services.manage' | 'hosts.view' | 'hosts.manage'
 
 export interface ManagedUser {
   id: string

@@ -20,6 +20,7 @@ const (
 	RoleAdmin = "admin"
 	RoleUser  = "user"
 
+	PermissionDashboardView  = "dashboard.view"
 	PermissionProjectsView   = "projects.view"
 	PermissionServicesView   = "services.view"
 	PermissionServicesManage = "services.manage"
@@ -28,6 +29,7 @@ const (
 )
 
 var UserPermissions = []string{
+	PermissionDashboardView,
 	PermissionProjectsView,
 	PermissionServicesView,
 	PermissionServicesManage,

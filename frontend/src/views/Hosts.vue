@@ -356,37 +356,39 @@ onMounted(loadHosts)
 
 <style scoped>
 .plain-card {
-  border-radius: 10px;
-  border: 1px solid var(--ops-border);
-  box-shadow: var(--ops-shadow);
+  border: 0;
+  background: transparent;
 }
 
 .plain-card :deep(.el-card__body) {
-  padding: 8px 20px;
+  padding: 0;
 }
 
 .host-list {
   display: flex;
   flex-direction: column;
+  gap: 12px;
 }
 
 .host-item {
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 18px 4px;
-  border-bottom: 1px solid var(--ops-border);
+  min-height: 88px;
+  padding: 16px 20px;
+  border: 1px solid var(--ops-border);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(28, 47, 78, .035);
+  transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease;
 }
-
-.host-item:last-child {
-  border-bottom: 0;
-}
+.host-item:hover { border-color: #d8e2f3; box-shadow: 0 5px 16px rgba(28, 47, 78, .07); transform: translateY(-1px); }
 
 .host-item-icon {
   flex-shrink: 0;
-  width: 44px;
-  height: 44px;
-  border-radius: 10px;
+  width: 38px;
+  height: 38px;
+  border-radius: 9px;
   background: var(--ops-primary-light);
   color: var(--ops-primary);
   display: flex;
@@ -469,8 +471,8 @@ onMounted(loadHosts)
 
 @media (max-width: 760px) {
   .page-heading-modern { flex-direction: column; }
-  .plain-card :deep(.el-card__body) { padding: 4px 14px; }
-  .host-item { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 12px; }
+  .host-list { gap: 10px; }
+  .host-item { display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 12px; padding: 14px; }
   .host-item-actions { grid-column: 1 / -1; width: 100%; padding-top: 10px; border-top: 1px solid #eef1f5; }
   .host-item-actions .el-button { flex: 1; }
   .docker-host-text { width: 100%; margin-left: 0; overflow-wrap: anywhere; }

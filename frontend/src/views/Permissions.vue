@@ -25,6 +25,7 @@ const permissionTreeProps = { label: 'label', children: 'children' }
 
 const projectNameById = computed(() => new Map(projects.value.map((project) => [project.id, project.name])))
 const permissionOptions: { value: UserPermission; label: string; description: string }[] = [
+  { value: 'dashboard.view', label: '查看控制台', description: '查看首页运行概况和统计信息' },
   { value: 'projects.view', label: '查看项目', description: '查看授权项目及环境概况' },
   { value: 'services.view', label: '查看服务', description: '查看实例、镜像、运行状态、日志和事件' },
   { value: 'services.manage', label: '管理服务', description: '部署、编辑、更新镜像及控制容器' },
@@ -32,6 +33,11 @@ const permissionOptions: { value: UserPermission; label: string; description: st
   { value: 'hosts.manage', label: '管理主机', description: '配置或删除主机并测试连接' },
 ]
 const permissionTree = [
+  {
+    id: 'dashboard', label: '控制台', description: '首页运行概况', children: [
+      { id: 'dashboard.view', label: '查看控制台', description: '查看首页运行概况和统计信息' },
+    ],
+  },
   {
     id: 'projects', label: '项目管理', description: '项目范围与项目信息', children: [
       { id: 'projects.view', label: '查看项目', description: '查看授权项目及环境概况' },

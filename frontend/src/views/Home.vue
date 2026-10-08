@@ -116,8 +116,9 @@ async function loadDashboard() {
   failures.value = ['项目', '环境', '服务类型', '实例', '主机'].filter((_, index) => results[index].status === 'rejected')
   if (projects.value && selectedProject.value && !projects.value.some((project) => project.id === selectedProject.value)) selectedProject.value = ''
   lastUpdated.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
+  await loadRecentEvents()
+  if (disposed) return
   loading.value = false
-  void loadRecentEvents()
 }
 const eventLabels: Record<string, string> = { deploy_succeeded: '部署成功', deploy_failed: '部署失败', update_image_succeeded: '镜像更新成功', update_image_failed: '镜像更新失败', container_started: '容器已启动', container_start_failed: '容器启动失败', container_stopped: '容器已停止', container_stop_failed: '容器停止失败', container_restarted: '容器已重启', container_restart_failed: '容器重启失败', container_removed: '容器已移除', container_remove_failed: '容器移除失败', health_check_passed: '健康检查通过', health_check_failed: '健康检查失败' }
 function eventTime(value: string) { const date = new Date(value); return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }) }
@@ -129,7 +130,7 @@ onUnmounted(() => { disposed = true; eventRequest++ })
 <template>
   <AppLayout>
     <div class="dashboard-toolbar"><el-select v-model="selectedProject" placeholder="全部项目" aria-label="筛选项目" :disabled="projects === null"><el-option label="全部项目" value="" /><el-option v-for="project in projects || []" :key="project.id" :value="project.id" :label="project.name" /></el-select><span class="toolbar-caption">{{ selectedProject ? '当前项目运行概况' : '全部可见资源' }}</span><el-button :icon="Refresh" :loading="loading" @click="loadDashboard">刷新</el-button></div>
-    <div class="dashboard-content" v-loading="loading">
+    <div class="dashboard-content page-content-loading" v-loading="loading">
     <el-alert v-if="failures.length" class="dashboard-error" :title="`${failures.join('、')}数据加载失败，相关统计暂不可用，请刷新重试。`" type="error" :closable="false" show-icon />
     <div class="dashboard-metrics">
       <button class="metric-card" :disabled="!canReadServices" @click="openServices()"><span class="metric-label">服务实例<el-icon><Box /></el-icon></span><strong>{{ canReadServices && summaryReady ? scopedInstances.length : '—' }}<small>个</small></strong><span class="metric-caption"><span v-if="canReadServices && summaryReady" class="success-text">{{ running }} 个运行中</span><span v-else>无服务查看权限</span> · 当前状态</span></button>
@@ -160,6 +161,8 @@ onUnmounted(() => { disposed = true; eventRequest++ })
 <style scoped>
 .dashboard-toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
 .dashboard-content { min-width: 0; }
+.dashboard-content.page-content-loading { min-height: calc(100dvh - 114px); }
+.dashboard-content:deep(> .el-loading-mask) { position: fixed !important; inset: 0 0 0 220px; width: auto; height: auto; }
 .dashboard-toolbar .el-select { width: 190px; }
 .dashboard-toolbar .el-button { margin-left: auto; }
 .toolbar-caption { font-size: 12px; color: var(--ops-text-secondary); }
@@ -230,7 +233,9 @@ onUnmounted(() => { disposed = true; eventRequest++ })
 .quick-actions .el-icon { color: var(--ops-text-secondary); }
 .dashboard-footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; color: var(--ops-text-secondary); font-size: 11px; margin-top: 20px; }
 @media (max-width: 1000px) { .dashboard-metrics { gap: 12px; } .metric-card { padding: 18px 16px; } .dashboard-columns { grid-template-columns: 1fr 1fr; gap: 16px; } .status-content { padding: 24px 16px; gap: 20px; } .status-ring { width: 124px; height: 124px; } .status-ring > div { width: 100px; height: 100px; } }
+@media (max-width: 1000px) and (min-width: 761px) { .dashboard-content:deep(> .el-loading-mask) { left: 64px; } }
 @media (max-width: 800px) { .dashboard-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .dashboard-columns, .dashboard-bottom { grid-template-columns: 1fr; } .status-content { justify-content: center; gap: 40px; } }
+@media (max-width: 760px) { .dashboard-content.page-content-loading { min-height: calc(100dvh - 220px - env(safe-area-inset-bottom)); } .dashboard-content:deep(> .el-loading-mask) { inset: 58px 0 calc(64px + env(safe-area-inset-bottom)) 0; } }
 @media (max-width: 480px) { .toolbar-caption { display: none; } .dashboard-toolbar .el-select { width: 170px; } .metric-card { padding: 15px; } .metric-card strong { font-size: 28px; } .metric-caption { font-size: 11px; } .status-content { gap: 25px; } .dashboard-panel header { padding: 16px; } .event-item { padding: 13px 16px; gap: 8px; } .event-item time { max-width: 66px; white-space: normal; } }
 @media (max-width: 640px) {
   .overview-table { display: none; }

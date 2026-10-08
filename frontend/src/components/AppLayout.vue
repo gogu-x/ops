@@ -10,11 +10,11 @@ const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 const navigation = computed(() => [
-  { path: '/', label: '控制台', icon: Grid, visible: true },
+  { path: '/', label: '控制台', icon: Grid, visible: auth.hasPermission('dashboard.view') },
   { path: '/services', label: '服务', icon: Box, visible: auth.hasPermission('services.view') },
   { path: '/projects', label: '项目', icon: FolderOpened, visible: auth.hasPermission('projects.view') },
   { path: '/hosts', label: '主机', icon: Monitor, visible: auth.hasPermission('hosts.view') },
-  { path: '/permissions', label: '权限管理', icon: User, visible: auth.user?.role === 'admin' },
+  { path: '/permissions', label: '权限', icon: User, visible: auth.user?.role === 'admin' },
 ].filter((item) => item.visible))
 async function logout() {
   try { await ElMessageBox.confirm('确定要退出登录吗？', '退出登录', { type: 'warning' }) } catch { return }

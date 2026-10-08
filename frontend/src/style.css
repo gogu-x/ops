@@ -393,6 +393,16 @@ body {
 }
 
 @media (max-width: 760px) {
+  /* iOS Safari zooms the page when a focused text control uses a font below 16px. */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="button"]):not([type="submit"]),
+  textarea,
+  select,
+  .el-input__inner,
+  .el-textarea__inner,
+  .el-select__input {
+    font-size: 16px !important;
+  }
+
   .el-dialog {
     width: calc(100vw - 24px) !important;
     max-height: calc(100vh - 24px);

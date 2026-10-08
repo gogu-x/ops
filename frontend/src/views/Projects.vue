@@ -177,7 +177,6 @@ onMounted(loadAll)
           <div class="project-item-main">
             <div class="project-item-title-row">
               <button class="project-item-name project-entry" @click="openProjectDetails(row)">{{ row.name }}</button>
-              <el-tag size="small" type="info" effect="plain" round>{{ serviceCountByProject[row.id] || 0 }} 个服务类型</el-tag>
               <el-tag v-if="row.env_vars" size="small" type="success" effect="plain" round>
                 <el-icon style="vertical-align: -2px; margin-right: 2px"><Key /></el-icon>已配置环境变量
               </el-tag>
@@ -282,31 +281,30 @@ onMounted(loadAll)
 .project-list {
   display: flex;
   flex-direction: column;
-  background: #fff;
-  border: 1px solid var(--ops-border);
-  border-radius: 10px;
-  overflow: hidden;
+  gap: 12px;
 }
 
 .project-item {
   display: flex;
   align-items: center;
   gap: 14px;
-  min-height: 110px;
-  padding: 24px;
-  border-bottom: 1px solid var(--ops-border);
+  min-height: 88px;
+  padding: 18px 20px;
+  border: 1px solid var(--ops-border);
+  border-radius: 12px;
   background: #fff;
+  box-shadow: 0 2px 8px rgba(28, 47, 78, .035);
+  transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease;
 }
-.project-item:last-child { border-bottom: 0; }
-.project-item:hover { background: #fcfdff; }
+.project-item:hover { border-color: #d8e2f3; background: #fff; box-shadow: 0 5px 16px rgba(28, 47, 78, .07); transform: translateY(-1px); }
 .project-entry { padding: 0; font: inherit; border: 0; background: transparent; cursor: pointer; }
 .project-entry:hover { color: var(--ops-primary); }
 
 .project-item-icon {
   flex-shrink: 0;
-  width: 42px;
-  height: 42px;
-  border-radius: 10px;
+  width: 38px;
+  height: 38px;
+  border-radius: 9px;
   background: var(--ops-primary-light);
   color: var(--ops-primary);
   display: flex;
@@ -327,7 +325,7 @@ onMounted(loadAll)
 }
 
 .project-item-name {
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--ops-text);
 }
@@ -404,7 +402,8 @@ onMounted(loadAll)
 
 @media (max-width: 760px) {
   .page-heading-modern { flex-direction: column; }
-  .project-item { min-height: 0; padding: 16px; flex-wrap: wrap; }
+  .project-list { gap: 10px; }
+  .project-item { min-height: 0; padding: 14px; flex-wrap: wrap; }
   .project-item-actions { width: 100%; padding-top: 10px; }
   :deep(.el-dialog) { width: calc(100vw - 24px) !important; margin-top: 3vh !important; }
   :deep(.el-drawer) { width: min(520px, calc(100vw - 18px)) !important; }
