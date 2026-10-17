@@ -5,6 +5,8 @@ export type InstanceEventType =
   | 'deploy_failed'
   | 'update_image_succeeded'
   | 'update_image_failed'
+  | 'rollback_succeeded'
+  | 'rollback_failed'
   | 'container_started'
   | 'container_start_failed'
   | 'container_stopped'

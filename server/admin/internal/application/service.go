@@ -497,18 +497,32 @@ func (s *Service) instanceResult(message interface{}) (model.ServiceInstance, er
 	return result, nil
 }
 
-func (s *Service) DeployInstance(ctx context.Context, id string) (model.ServiceInstance, error) {
+func (s *Service) DeployInstance(ctx context.Context, id string, operator ...string) (model.ServiceInstance, error) {
 	if err := s.ensureStoredInstanceHost(ctx, id); err != nil {
 		return model.ServiceInstance{}, err
 	}
-	return s.instanceResult(model.DeployRequest{ID: id})
+	return s.instanceResult(model.DeployRequest{ID: id, Operator: firstOperator(operator)})
 }
 
-func (s *Service) UpdateInstanceImage(ctx context.Context, id, image string) (model.ServiceInstance, error) {
+func (s *Service) UpdateInstanceImage(ctx context.Context, id, image string, operator ...string) (model.ServiceInstance, error) {
 	if err := s.ensureStoredInstanceHost(ctx, id); err != nil {
 		return model.ServiceInstance{}, err
 	}
-	return s.instanceResult(model.UpdateImageRequest{ID: id, Image: image})
+	return s.instanceResult(model.UpdateImageRequest{ID: id, Image: image, Operator: firstOperator(operator)})
+}
+
+func firstOperator(operator []string) string {
+	if len(operator) == 0 {
+		return ""
+	}
+	return operator[0]
+}
+
+func (s *Service) RollbackInstance(ctx context.Context, id, deploymentID, operator string) (model.ServiceInstance, error) {
+	if err := s.ensureStoredInstanceHost(ctx, id); err != nil {
+		return model.ServiceInstance{}, err
+	}
+	return s.instanceResult(model.RollbackDeploymentRequest{ID: id, DeploymentID: deploymentID, Operator: operator})
 }
 
 func (s *Service) ensureStoredInstanceHost(ctx context.Context, id string) error {
@@ -549,6 +563,18 @@ func (s *Service) InstanceDetail(id string) (model.ContainerDetail, error) {
 	return result.Detail, nil
 }
 
+func (s *Service) InstanceResourceHistory(id string, limit int) (model.InstanceResourceHistoryResponse, error) {
+	value, err := s.gateway.Request("ops-instance", model.InstanceResourceHistoryRequest{ID: id, Limit: limit})
+	if err != nil {
+		return model.InstanceResourceHistoryResponse{}, err
+	}
+	result, ok := value.(model.InstanceResourceHistoryResponse)
+	if !ok {
+		return model.InstanceResourceHistoryResponse{}, errors.New("invalid service instance actor response")
+	}
+	return result, nil
+}
+
 func (s *Service) InstanceLogs(id, tail string) (string, error) {
 	value, err := s.gateway.Request("ops-instance", model.LogsRequest{ID: id, Tail: tail})
 	if err != nil {
@@ -571,6 +597,18 @@ func (s *Service) InstanceEvents(id string, limit int) ([]model.InstanceEvent, e
 		return nil, errors.New("invalid service instance actor response")
 	}
 	return result.Events, nil
+}
+
+func (s *Service) InstanceDeployments(id string, limit int) ([]model.InstanceDeployment, error) {
+	value, err := s.gateway.Request("ops-instance", model.ListDeploymentsRequest{ID: id, Limit: limit})
+	if err != nil {
+		return nil, err
+	}
+	result, ok := value.(model.DeploymentListResponse)
+	if !ok {
+		return nil, errors.New("invalid service deployment response")
+	}
+	return result.Deployments, nil
 }
 
 func containsProject(items []model.Project, id string) bool {

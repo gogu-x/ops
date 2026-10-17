@@ -11,7 +11,7 @@ import { environmentApi, type Environment, type EnvironmentForm } from '../api/e
 import { serviceApi, type ServiceType, type ServiceTypeForm } from '../api/services'
 import { hostApi, type Host } from '../api/hosts'
 import { projectApi, type Project } from '../api/projects'
-import { instanceApi, type ServiceInstance, type ServiceInstanceForm, type ContainerDetail, type RestartPolicy } from '../api/instances'
+import { instanceApi, type BatchAction, type InstanceDeployment, type ServiceInstanceOperation, type ServiceInstance, type ServiceInstanceForm, type ContainerDetail, type ContainerResourceHistory, type RestartPolicy } from '../api/instances'
 import { eventApi, type InstanceEvent } from '../api/events'
 import AppLayout from '../components/AppLayout.vue'
 
@@ -29,12 +29,18 @@ const loadError = ref(false)
 const submitting = ref(false)
 const canManage = computed(() => auth.hasPermission('services.manage'))
 let servicesDisposed = false
+const operationStorageKey = 'ops_service_instance_operation_id'
 
 // -------- 顶部筛选状态：项目 -> 环境 -> 服务类型 --------
 const activeProjectId = ref<string>(typeof route.query.project === 'string' ? route.query.project : '')
 const activeEnvironmentId = ref<string>(typeof route.query.environment === 'string' ? route.query.environment : '')
 const activeTypeId = ref<string>('')
 const keyword = ref('')
+const batchOperationDrawerVisible = ref(false)
+const batchOperationSelectedIDs = ref<string[]>([])
+const batchOperationSubmitting = ref(false)
+const batchOperationAction = ref<BatchAction>('restart')
+const batchOperationImage = ref('')
 
 function environmentsInProject(projectId: string): Environment[] {
   return environments.value.filter((e) => e.project_id === projectId)
@@ -61,6 +67,31 @@ function imageVersion(image?: string | null): string {
 const visibleInstances = computed(() => {
   const allowedTypes = new Set(typesInEnvironment(activeEnvironmentId.value).map((t) => t.id))
   return instances.value.filter((i) => allowedTypes.has(i.service_type_id) && (!activeTypeId.value || i.service_type_id === activeTypeId.value))
+})
+
+const environmentInstances = computed(() => {
+  const allowedTypes = new Set(typesInEnvironment(activeEnvironmentId.value).map((type) => type.id))
+  return instances.value.filter((item) => allowedTypes.has(item.service_type_id))
+})
+
+const batchOperationSelectedInstances = computed(() => {
+  const selectedIDs = new Set(batchOperationSelectedIDs.value)
+  return environmentInstances.value.filter((item) => selectedIDs.has(item.id))
+})
+
+const batchOperationGroups = computed(() => {
+  const selectedIDs = new Set(batchOperationSelectedIDs.value)
+  return typesInEnvironment(activeEnvironmentId.value).map((type) => {
+    const groupInstances = environmentInstances.value.filter((item) => item.service_type_id === type.id)
+    const selectedCount = groupInstances.filter((item) => selectedIDs.has(item.id)).length
+    return {
+      type,
+      instances: groupInstances,
+      selectedCount,
+      allSelected: groupInstances.length > 0 && selectedCount === groupInstances.length,
+      indeterminate: selectedCount > 0 && selectedCount < groupInstances.length,
+    }
+  })
 })
 
 const environmentInstanceCount = computed(() => typesInEnvironment(activeEnvironmentId.value).reduce((count, type) => count + countInType(type.id), 0))
@@ -430,7 +461,7 @@ function runtimeDuration(row: ServiceInstance) {
     .replace(/^(.+)$/, (duration) => `${approximate ? '约 ' : ''}${duration}`)
 }
 
-const startEventTypes = new Set(['deploy_succeeded', 'update_image_succeeded', 'container_started', 'container_restarted'])
+const startEventTypes = new Set(['deploy_succeeded', 'update_image_succeeded', 'rollback_succeeded', 'container_started', 'container_restarted'])
 let startupEventRequest = 0
 
 async function loadLatestStartedAt() {
@@ -453,6 +484,11 @@ async function loadLatestStartedAt() {
   if (requestId === startupEventRequest && !servicesDisposed) latestStartedAt.value = results
 }
 
+watch([activeProjectId, activeEnvironmentId], () => {
+  batchOperationSelectedIDs.value = []
+  batchOperationDrawerVisible.value = false
+})
+
 watch([activeProjectId, activeEnvironmentId, activeTypeId], () => {
   if (!loading.value && projects.value.length) void loadLatestStartedAt()
 })
@@ -463,6 +499,176 @@ async function refreshAll() {
 }
 
 const actionLoadingId = ref('')
+const operationTask = ref<ServiceInstanceOperation | null>(null)
+const operationPollError = ref('')
+let operationPollTimer: ReturnType<typeof setInterval> | null = null
+let operationPollBusy = false
+
+function toggleBatchOperationGroup(typeID: string, checked: boolean) {
+  const group = batchOperationGroups.value.find((item) => item.type.id === typeID)
+  if (!group) return
+  const selected = new Set(batchOperationSelectedIDs.value)
+  const pendingCount = group.instances.filter((instance) => checked ? !selected.has(instance.id) : selected.has(instance.id)).length
+  if (checked && selected.size + pendingCount > 100) {
+    ElMessage.warning('单次最多选择 100 个实例')
+    return
+  }
+  for (const instance of group.instances) {
+    if (checked) selected.add(instance.id)
+    else selected.delete(instance.id)
+  }
+  batchOperationSelectedIDs.value = [...selected]
+}
+
+function setBatchOperationInstanceSelected(id: string, checked: boolean) {
+  const selected = new Set(batchOperationSelectedIDs.value)
+  if (checked && !selected.has(id) && selected.size >= 100) {
+    ElMessage.warning('单次最多选择 100 个实例')
+    return
+  }
+  if (checked) selected.add(id)
+  else selected.delete(id)
+  batchOperationSelectedIDs.value = [...selected]
+}
+
+function openBatchOperationDrawer() {
+  if (!environmentInstances.value.length) return
+  batchOperationDrawerVisible.value = true
+}
+
+const batchOperationLabels: Record<BatchAction, string> = {
+  deploy: '部署 / 重新部署',
+  start: '启动',
+  stop: '停止',
+  restart: '重启',
+  update_image: '更新镜像',
+}
+const batchOperationOptions: Array<{ value: BatchAction; label: string }> = [
+  { value: 'deploy', label: '批量部署 / 重新部署' },
+  { value: 'start', label: '批量启动' },
+  { value: 'stop', label: '批量停止' },
+  { value: 'restart', label: '批量重启' },
+  { value: 'update_image', label: '批量更新镜像' },
+]
+
+async function runBatchOperation() {
+  if (batchOperationSubmitting.value) return
+  if (operationTask.value?.status === 'running') {
+    ElMessage.warning('请等待当前批量任务完成')
+    return
+  }
+  const targets = batchOperationSelectedInstances.value
+  if (!targets.length) return
+  const action = batchOperationAction.value
+  const image = action === 'update_image' ? batchOperationImage.value.trim() : undefined
+  if (action === 'update_image' && !image) {
+    ElMessage.warning('请填写新的镜像版本')
+    return
+  }
+  batchOperationSubmitting.value = true
+  try {
+    if (action !== 'start') {
+      await ElMessageBox.confirm(
+        `将对当前环境中选定的 ${targets.length} 个实例执行${batchOperationLabels[action]}，失败项会单独列出。确认继续？`,
+        `确认批量${batchOperationLabels[action]}`,
+        { type: 'warning' },
+      )
+    }
+  } catch {
+    batchOperationSubmitting.value = false
+    return
+  }
+  operationPollError.value = ''
+  try {
+    const task = await instanceApi.startBatchOperation(targets.map((item) => item.id), action, image)
+    operationTask.value = task
+    batchOperationSelectedIDs.value = []
+    batchOperationImage.value = ''
+    batchOperationDrawerVisible.value = false
+    ElMessage.success(`批量${batchOperationLabels[action]}任务已提交，可查看逐项进度`)
+    startOperationPolling(task.id)
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.error || '提交批量操作任务失败')
+  } finally {
+    batchOperationSubmitting.value = false
+  }
+}
+
+function startOperationPolling(operationID: string) {
+  stopOperationPolling()
+  sessionStorage.setItem(operationStorageKey, operationID)
+  const poll = async () => {
+    if (operationPollBusy || servicesDisposed) return
+    operationPollBusy = true
+    try {
+      const task = await instanceApi.operation(operationID)
+      operationTask.value = task
+      operationPollError.value = ''
+      if (task.status !== 'running') {
+        stopOperationPolling()
+        await loadAll()
+        if (activeInstanceId.value) {
+          await loadEvents(activeInstanceId.value)
+          await loadDeployments(activeInstanceId.value)
+        }
+        if (task.status === 'succeeded') ElMessage.success(`批量操作完成：${task.succeeded}/${task.total} 个成功`)
+        else if (task.status === 'partial') ElMessage.warning(`批量操作完成：${task.succeeded} 个成功，${task.failed} 个失败`)
+        else ElMessage.error(`批量操作失败：${task.failed} 个实例未完成`)
+      }
+    } catch (error: any) {
+      operationPollError.value = error?.response?.data?.error || '进度读取失败，稍后自动重试'
+      if (error?.response?.status === 404) {
+        stopOperationPolling()
+        sessionStorage.removeItem(operationStorageKey)
+        if (operationTask.value?.id === operationID) operationTask.value.status = 'failed'
+      }
+    } finally {
+      operationPollBusy = false
+    }
+  }
+  void poll()
+  operationPollTimer = setInterval(() => void poll(), 1000)
+}
+
+function stopOperationPolling() {
+  if (operationPollTimer) {
+    clearInterval(operationPollTimer)
+    operationPollTimer = null
+  }
+}
+
+async function resumeOperation() {
+  const operationID = sessionStorage.getItem(operationStorageKey)
+  if (!operationID) return
+  try {
+    const task = await instanceApi.operation(operationID)
+    operationTask.value = task
+    if (task.status === 'running') startOperationPolling(operationID)
+  } catch {
+    sessionStorage.removeItem(operationStorageKey)
+    ElMessage.warning('批量任务记录已过期，无法恢复进度')
+  }
+}
+
+function dismissOperationTask() {
+  if (operationTask.value?.status === 'running') return
+  operationTask.value = null
+  operationPollError.value = ''
+  sessionStorage.removeItem(operationStorageKey)
+}
+
+function operationActionLabel(action?: BatchAction) {
+  const labels: Record<BatchAction, string> = { deploy: '部署', start: '启动', stop: '停止', restart: '重启', update_image: '更新镜像' }
+  return action ? labels[action] || action : '批量操作'
+}
+
+function operationItemStatusLabel(status: string) {
+  return ({ pending: '等待中', running: '处理中', succeeded: '成功', failed: '失败' } as Record<string, string>)[status] || status
+}
+
+function operationProgress(task: ServiceInstanceOperation) {
+  return task.total ? Math.round((task.completed / task.total) * 100) : 0
+}
 
 async function deployInstance(row: ServiceInstance) {
   actionLoadingId.value = row.id
@@ -470,7 +676,7 @@ async function deployInstance(row: ServiceInstance) {
     await instanceApi.deploy(row.id)
     ElMessage.success(`实例"${row.name}"已部署并启动`)
     await refreshInstanceStatus(row)
-    if (activeInstanceId.value === row.id) { await loadDetail(row.id); await loadEvents(row.id) }
+    if (activeInstanceId.value === row.id) { await loadDetail(row.id); await loadEvents(row.id); await loadDeployments(row.id) }
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.error || '部署失败')
   } finally {
@@ -581,7 +787,7 @@ async function submitUpdateImage() {
     ElMessage.success(`实例"${target.name}"已更新为镜像 ${image} 并重新部署`)
     updateImageDialogVisible.value = false
     await loadAll()
-    if (activeInstanceId.value === target.id) { await loadDetail(target.id); await loadEvents(target.id) }
+    if (activeInstanceId.value === target.id) { await loadDetail(target.id); await loadEvents(target.id); await loadDeployments(target.id) }
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.error || '更新镜像失败')
   } finally {
@@ -646,7 +852,83 @@ function clearLogs() {
 
 const activeInstanceId = ref('')
 const activeInstance = computed(() => instances.value.find((i) => i.id === activeInstanceId.value) || null)
-const detailTab = ref<'overview' | 'config' | 'events' | 'logs'>('overview')
+const detailTab = ref<'overview' | 'config' | 'events' | 'deployments' | 'resources' | 'logs'>('overview')
+const resourceHistory = ref<ContainerResourceHistory | null>(null)
+const resourceMetrics = computed(() => resourceHistory.value?.latest || null)
+const resourceLoading = ref(false)
+const resourceRefreshing = ref(false)
+const resourceError = ref('')
+let resourceRequestId = 0
+let resourceInFlight = false
+let resourceRefreshTimer: ReturnType<typeof setInterval> | null = null
+
+const cpuSparkline = computed(() => sparklinePoints((resourceHistory.value?.samples || []).map((sample) => sample.cpu_percent)))
+const memorySparkline = computed(() => sparklinePoints((resourceHistory.value?.samples || []).map((sample) => sample.memory_percent)))
+
+function sparklinePoints(values: number[]): string {
+  if (!values.length) return ''
+  const maxValue = Math.max(100, ...values)
+  return values.map((value, index) => {
+    const x = values.length === 1 ? 100 : index / (values.length - 1) * 100
+    const y = 28 - Math.min(1, value / maxValue) * 24
+    return `${x},${y}`
+  }).join(' ')
+}
+
+function formatBytes(value?: number): string {
+  if (!value || value < 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let amount = value
+  let unit = 0
+  while (amount >= 1024 && unit < units.length - 1) {
+    amount /= 1024
+    unit++
+  }
+  const digits = unit === 0 || amount >= 100 ? 0 : amount >= 10 ? 1 : 2
+  return `${amount.toFixed(digits)} ${units[unit]}`
+}
+
+async function loadResources(instanceId: string, silent = false) {
+  if (resourceInFlight) return
+  resourceInFlight = true
+  const requestId = ++resourceRequestId
+  if (!resourceHistory.value) resourceLoading.value = true
+  else if (!silent) resourceRefreshing.value = true
+  resourceError.value = ''
+  try {
+    const history = await instanceApi.resources(instanceId, 60)
+    if (requestId !== resourceRequestId || activeInstanceId.value !== instanceId || detailTab.value !== 'resources' || !detailVisible.value) return
+    resourceHistory.value = history
+  } catch (error: any) {
+    if (requestId === resourceRequestId && activeInstanceId.value === instanceId && detailTab.value === 'resources') {
+      resourceError.value = error?.response?.data?.error || '资源历史获取失败，请稍后重试'
+    }
+  } finally {
+    if (requestId === resourceRequestId) {
+      resourceInFlight = false
+      resourceLoading.value = false
+      resourceRefreshing.value = false
+    }
+  }
+}
+
+function stopResourceHistoryRefresh() {
+  if (resourceRefreshTimer) {
+    clearInterval(resourceRefreshTimer)
+    resourceRefreshTimer = null
+  }
+  resourceRequestId++
+  resourceInFlight = false
+  resourceLoading.value = false
+  resourceRefreshing.value = false
+}
+
+function startResourceHistoryRefresh(instanceId: string) {
+  stopResourceHistoryRefresh()
+  resourceInFlight = false
+  void loadResources(instanceId)
+  resourceRefreshTimer = setInterval(() => void loadResources(instanceId, true), 30000)
+}
 
 function openInstanceDetails(row: ServiceInstance) {
   activeInstanceId.value = row.id
@@ -661,6 +943,7 @@ async function openInstanceLogs(row: ServiceInstance) {
 }
 
 function onDetailDrawerClosed() {
+  stopResourceHistoryRefresh()
   activeInstanceId.value = ''
   detailEditMode.value = false
   editingInstanceId.value = ''
@@ -687,6 +970,9 @@ async function loadDetail(instanceId: string) {
 const events = ref<InstanceEvent[]>([])
 const eventsLoading = ref(false)
 let eventsRequestId = 0
+const deployments = ref<InstanceDeployment[]>([])
+const deploymentsLoading = ref(false)
+let deploymentsRequestId = 0
 
 async function loadEvents(instanceId: string) {
   const requestId = ++eventsRequestId
@@ -701,11 +987,55 @@ async function loadEvents(instanceId: string) {
   }
 }
 
+async function loadDeployments(instanceId: string) {
+  const requestId = ++deploymentsRequestId
+  deploymentsLoading.value = true
+  try {
+    const value = await instanceApi.deployments(instanceId, 30)
+    if (requestId === deploymentsRequestId && activeInstanceId.value === instanceId) deployments.value = value
+  } catch {
+    if (requestId === deploymentsRequestId && activeInstanceId.value === instanceId) deployments.value = []
+  } finally {
+    if (requestId === deploymentsRequestId) deploymentsLoading.value = false
+  }
+}
+
+async function rollbackDeployment(deployment: InstanceDeployment) {
+  const target = activeInstance.value
+  if (!target || deployment.status !== 'succeeded') return
+  try {
+    await ElMessageBox.confirm(
+      `确认将实例"${target.name}"回滚到镜像版本 ${imageVersion(deployment.image)}？当前实例配置会保留。`,
+      '确认回滚',
+      { type: 'warning', confirmButtonText: '确认回滚' },
+    )
+  } catch {
+    return
+  }
+  actionLoadingId.value = target.id
+  try {
+    await instanceApi.rollback(target.id, deployment.id)
+    ElMessage.success(`已回滚到 ${imageVersion(deployment.image)}`)
+    await Promise.all([loadAll(), loadEvents(target.id), loadDeployments(target.id)])
+    await loadDetail(target.id)
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.error || '回滚失败')
+  } finally {
+    actionLoadingId.value = ''
+  }
+}
+
+function deploymentOperationLabel(operation: string) {
+  return ({ deploy: '部署', update_image: '更新镜像', rollback: '版本回滚' } as Record<string, string>)[operation] || operation
+}
+
 const eventMeta: Record<string, { text: string; type: 'success' | 'danger' }> = {
   deploy_succeeded: { text: '部署成功', type: 'success' },
   deploy_failed: { text: '部署失败', type: 'danger' },
   update_image_succeeded: { text: '镜像更新成功', type: 'success' },
   update_image_failed: { text: '镜像更新失败', type: 'danger' },
+  rollback_succeeded: { text: '版本回滚成功', type: 'success' },
+  rollback_failed: { text: '版本回滚失败', type: 'danger' },
   container_started: { text: '容器启动成功', type: 'success' },
   container_start_failed: { text: '容器启动失败', type: 'danger' },
   container_stopped: { text: '容器已停止', type: 'success' },
@@ -746,12 +1076,18 @@ function formatDateTime(value?: string): string {
 }
 
 watch(activeInstanceId, (id) => {
+  stopResourceHistoryRefresh()
+  resourceHistory.value = null
+  resourceError.value = ''
   detailTab.value = 'overview'
   detailData.value = null
   events.value = []
+  deployments.value = []
+  deploymentsLoading.value = false
   logsContent.value = ''
   logsLoading.value = false
   logsRequestId++
+  deploymentsRequestId++
   if (!id) {
     detailVisible.value = false
     return
@@ -763,9 +1099,23 @@ watch(activeInstanceId, (id) => {
 
 watch([activeInstanceId, detailTab], ([id, tab]) => {
   if (id && tab === 'logs') void loadLogs(id)
+  if (id && tab === 'deployments') void loadDeployments(id)
+})
+
+watch([activeInstanceId, detailTab, detailVisible, () => activeInstance.value?.status], ([id, tab, visible, status]) => {
+  if (id && visible && tab === 'resources' && status !== 'not_deployed') {
+    if (status === 'running') startResourceHistoryRefresh(id)
+    else {
+      stopResourceHistoryRefresh()
+      void loadResources(id)
+    }
+  } else {
+    stopResourceHistoryRefresh()
+  }
 })
 
 onMounted(() => {
+  void resumeOperation()
   loadAll().then(() => {
     if (servicesDisposed) return
     startStatusPolling()
@@ -782,11 +1132,13 @@ onMounted(() => {
 })
 onUnmounted(() => {
   servicesDisposed = true
+  stopOperationPolling()
   startupEventRequest++
   stopStatusPolling()
   detailRequestId++
   eventsRequestId++
   logsRequestId++
+  stopResourceHistoryRefresh()
 })
 </script>
 
@@ -838,8 +1190,30 @@ onUnmounted(() => {
               <button class="type-tab" :class="{ active: !activeTypeId }" :aria-pressed="!activeTypeId" @click="activeTypeId = ''; onTypeChange()">全部 <em>{{ environmentInstanceCount }}</em></button>
               <button v-for="type in typesInEnvironment(activeEnvironmentId)" :key="type.id" class="type-tab" :class="{ active: activeTypeId === type.id }" :aria-pressed="activeTypeId === type.id" @click="activeTypeId = type.id; onTypeChange()">{{ type.name }} <em>{{ countInType(type.id) }}</em></button>
             </div>
-            <el-input v-model="keyword" :prefix-icon="Search" clearable placeholder="搜索实例、镜像或备注" aria-label="搜索实例" class="instance-search" />
+            <div class="filter-actions">
+              <el-button v-if="canManage" size="small" type="primary" plain :icon="MoreFilled" :disabled="!environmentInstances.length || operationTask?.status === 'running' || batchOperationSubmitting" @click="openBatchOperationDrawer">批量操作</el-button>
+              <el-input v-model="keyword" :prefix-icon="Search" clearable placeholder="搜索实例、镜像或备注" aria-label="搜索实例" class="instance-search" />
+            </div>
           </div>
+          <section v-if="operationTask" class="bulk-task-panel" :class="`task-${operationTask.status}`">
+            <div class="bulk-task-heading">
+              <div><b>{{ operationActionLabel(operationTask.action) }}任务</b><span>{{ operationTask.status === 'running' ? '正在逐项处理' : '任务已完成' }}</span></div>
+              <el-button v-if="operationTask.status !== 'running'" text circle :icon="Close" aria-label="关闭任务结果" @click="dismissOperationTask" />
+            </div>
+            <div class="bulk-task-progress">
+              <el-progress :percentage="operationProgress(operationTask)" :status="operationTask.status === 'failed' ? 'exception' : operationTask.status === 'succeeded' ? 'success' : undefined" :stroke-width="7" />
+              <span>{{ operationTask.completed }}/{{ operationTask.total }} · 成功 {{ operationTask.succeeded }} · 失败 {{ operationTask.failed }}</span>
+            </div>
+            <div v-if="operationPollError" class="bulk-task-poll-error">{{ operationPollError }}</div>
+            <div class="bulk-task-items">
+              <div v-for="item in operationTask.items" :key="item.instance_id" class="bulk-task-item">
+                <span class="bulk-task-dot" :class="`item-${item.status}`"></span>
+                <b>{{ item.name }}</b>
+                <span class="bulk-task-item-status">{{ operationItemStatusLabel(item.status) }}</span>
+                <small v-if="item.error">{{ item.error }}</small>
+              </div>
+            </div>
+          </section>
           <el-empty v-if="!typesInEnvironment(activeEnvironmentId).length" description="当前环境暂无服务类型" :image-size="60">
             <el-button v-if="canManage" :icon="Plus" @click="openCreateType">添加服务类型</el-button>
           </el-empty>
@@ -1022,6 +1396,74 @@ onUnmounted(() => {
                 </div>
               </el-tab-pane>
 
+              <el-tab-pane label="部署记录" name="deployments">
+                <div v-loading="deploymentsLoading" class="detail-scroll deployment-history">
+                  <div v-if="!deploymentsLoading && !deployments.length" class="detail-empty">暂无部署记录，新部署或镜像更新后会显示在这里。</div>
+                  <article v-for="deployment in deployments" :key="deployment.id" class="deployment-history-item">
+                    <div class="deployment-history-main">
+                      <div>
+                        <div class="deployment-history-title">{{ deploymentOperationLabel(deployment.operation) }} · <span :title="deployment.image">{{ imageVersion(deployment.image) }}</span></div>
+                        <div class="deployment-history-meta">{{ formatDateTime(deployment.created_at) }}<template v-if="deployment.operator"> · {{ deployment.operator }}</template></div>
+                      </div>
+                      <el-tag :type="deployment.status === 'succeeded' ? 'success' : 'danger'" size="small" effect="light">{{ deployment.status === 'succeeded' ? '成功' : '失败' }}</el-tag>
+                    </div>
+                    <div v-if="deployment.previous_image && deployment.previous_image !== deployment.image" class="deployment-history-diff">
+                      {{ imageVersion(deployment.previous_image) }} <span>→</span> {{ imageVersion(deployment.image) }}
+                    </div>
+                    <div v-if="deployment.message" class="deployment-history-error">{{ deployment.message }}</div>
+                    <el-button
+                      v-if="canManage && deployment.status === 'succeeded' && deployment.image !== activeInstance.image"
+                      size="small"
+                      plain
+                      :loading="actionLoadingId === activeInstance.id"
+                      @click="rollbackDeployment(deployment)"
+                    >回滚到此版本</el-button>
+                  </article>
+                </div>
+              </el-tab-pane>
+
+              <el-tab-pane v-if="activeInstance.status !== 'not_deployed'" label="资源监控" name="resources">
+                <div v-loading="resourceLoading" class="detail-scroll resource-monitor">
+                  <div class="resource-toolbar">
+                    <div class="resource-live-label">
+                      <span class="resource-live-dot" :class="{ stopped: activeInstance.status !== 'running' }"></span>
+                      <span>{{ activeInstance.status === 'running' ? '后台采集中' : '容器已停止' }}</span>
+                      <small>{{ activeInstance.status === 'running' ? '每 30 秒采样 · 近 30 分钟趋势' : '显示最近采集到的历史数据' }}</small>
+                    </div>
+                    <el-button size="small" plain :icon="Refresh" :loading="resourceRefreshing || resourceLoading" @click="loadResources(activeInstance.id)">刷新</el-button>
+                  </div>
+                  <div v-if="resourceError" class="resource-error">{{ resourceError }}</div>
+                  <template v-if="resourceMetrics">
+                    <div class="resource-metric-grid">
+                      <article class="resource-metric-card">
+                        <div class="resource-card-heading"><span>CPU 使用率</span><span class="resource-card-period">实时</span></div>
+                        <div class="resource-metric-value">{{ resourceMetrics.cpu_percent.toFixed(1) }}<small>%</small></div>
+                        <svg class="resource-sparkline" viewBox="0 0 100 30" preserveAspectRatio="none" aria-label="CPU 使用趋势"><polyline :points="cpuSparkline" /></svg>
+                      </article>
+                      <article class="resource-metric-card">
+                        <div class="resource-card-heading"><span>内存使用</span><span class="resource-card-period">{{ resourceMetrics.memory_percent.toFixed(1) }}%</span></div>
+                        <div class="resource-metric-value resource-memory-value">{{ formatBytes(resourceMetrics.memory_usage) }}<small>/ {{ formatBytes(resourceMetrics.memory_limit) }}</small></div>
+                        <svg class="resource-sparkline memory" viewBox="0 0 100 30" preserveAspectRatio="none" aria-label="内存使用趋势"><polyline :points="memorySparkline" /></svg>
+                      </article>
+                    </div>
+                    <div class="resource-secondary-grid">
+                      <article class="resource-secondary-card">
+                        <div class="resource-card-heading"><span>网络流量</span><span>累计</span></div>
+                        <div class="resource-direction"><span>接收</span><strong>{{ formatBytes(resourceMetrics.network_rx_bytes) }}</strong></div>
+                        <div class="resource-direction"><span>发送</span><strong>{{ formatBytes(resourceMetrics.network_tx_bytes) }}</strong></div>
+                      </article>
+                      <article class="resource-secondary-card">
+                        <div class="resource-card-heading"><span>磁盘 I/O</span><span>累计</span></div>
+                        <div class="resource-direction"><span>读取</span><strong>{{ formatBytes(resourceMetrics.block_read_bytes) }}</strong></div>
+                        <div class="resource-direction"><span>写入</span><strong>{{ formatBytes(resourceMetrics.block_write_bytes) }}</strong></div>
+                      </article>
+                    </div>
+                    <div class="resource-sample-footer"><span>进程数 <strong>{{ resourceMetrics.processes }}</strong></span><span>采样时间 {{ formatDateTime(resourceMetrics.sampled_at) }}</span></div>
+                  </template>
+                  <div v-else-if="!resourceLoading && !resourceError" class="detail-empty">后台采集器正在准备数据，首条数据通常会在一分钟内出现。</div>
+                </div>
+              </el-tab-pane>
+
               <el-tab-pane v-if="activeInstance.status !== 'not_deployed'" label="日志" name="logs">
                 <div class="detail-scroll detail-logs">
                   <div class="logs-toolbar">
@@ -1042,6 +1484,83 @@ onUnmounted(() => {
                 </div>
               </el-tab-pane>
               </el-tabs>
+            </div>
+          </el-drawer>
+
+          <el-drawer
+            v-model="batchOperationDrawerVisible"
+            direction="rtl"
+            size="560px"
+            :with-header="false"
+            class="batch-operation-el-drawer"
+          >
+            <div class="batch-operation-drawer">
+              <header class="batch-operation-header">
+                <div class="batch-operation-title-wrap">
+                  <span class="batch-operation-icon"><el-icon><MoreFilled /></el-icon></span>
+                  <div class="batch-operation-title-text">
+                    <h2>批量操作</h2>
+                    <p>{{ activeProject?.name || '当前项目' }} / {{ activeEnvironment?.name || '当前环境' }}</p>
+                  </div>
+                </div>
+                <el-button circle text :icon="Close" aria-label="关闭批量操作" @click="batchOperationDrawerVisible = false" />
+              </header>
+
+              <div class="batch-operation-hint">先选择操作；更新镜像时填写目标镜像，再按服务类型勾选容器。单次最多选择 100 个容器。</div>
+              <div class="batch-operation-controls">
+                <el-select v-model="batchOperationAction" aria-label="选择批量操作" placeholder="选择操作">
+                  <el-option v-for="option in batchOperationOptions" :key="option.value" :label="option.label" :value="option.value" />
+                </el-select>
+                <el-input v-if="batchOperationAction === 'update_image'" v-model="batchOperationImage" placeholder="目标镜像，例如 gogs-game:v1004-68d489e4" aria-label="目标镜像" />
+              </div>
+              <div class="batch-operation-list-heading">
+                <span>按服务类型选择容器</span>
+                <span>已选 {{ batchOperationSelectedInstances.length }} 个</span>
+              </div>
+
+              <div v-if="environmentInstances.length" class="batch-operation-groups">
+                <section v-for="group in batchOperationGroups" :key="group.type.id" class="batch-operation-group">
+                  <div class="batch-operation-group-heading">
+                    <el-checkbox
+                      :model-value="group.allSelected"
+                      :indeterminate="group.indeterminate"
+                      :disabled="!group.instances.length || operationTask?.status === 'running' || batchOperationSubmitting"
+                      @change="toggleBatchOperationGroup(group.type.id, Boolean($event))"
+                    >
+                      {{ group.type.name }}
+                    </el-checkbox>
+                    <span>{{ group.selectedCount }}/{{ group.instances.length }}</span>
+                  </div>
+                  <div v-if="group.instances.length" class="batch-operation-instance-list">
+                    <el-checkbox
+                      v-for="instance in group.instances"
+                      :key="instance.id"
+                      :model-value="batchOperationSelectedIDs.includes(instance.id)"
+                      :disabled="operationTask?.status === 'running' || batchOperationSubmitting"
+                      class="batch-operation-instance-checkbox"
+                      @change="setBatchOperationInstanceSelected(instance.id, Boolean($event))"
+                    >
+                      <span class="batch-operation-instance-content">
+                        <span class="batch-operation-instance-name" :title="instance.name">{{ instance.name }}</span>
+                      </span>
+                    </el-checkbox>
+                  </div>
+                  <div v-else class="batch-operation-empty-group">该服务类型暂无实例</div>
+                </section>
+              </div>
+              <el-empty v-else description="当前环境暂无可操作的实例" :image-size="72" />
+
+              <footer class="batch-operation-footer">
+                <div class="batch-operation-footer-actions">
+                  <el-button @click="batchOperationDrawerVisible = false">取消</el-button>
+                  <el-button
+                    :type="batchOperationAction === 'stop' ? 'danger' : 'primary'"
+                    :loading="batchOperationSubmitting"
+                    :disabled="!batchOperationSelectedInstances.length || operationTask?.status === 'running' || (batchOperationAction === 'update_image' && !batchOperationImage.trim())"
+                    @click="runBatchOperation"
+                  >{{ batchOperationLabels[batchOperationAction] }} {{ batchOperationSelectedInstances.length }} 个实例</el-button>
+                </div>
+              </footer>
             </div>
           </el-drawer>
         </div>
@@ -1167,9 +1686,7 @@ onUnmounted(() => {
           <el-input v-model="updateImageForm.image" placeholder="例如 gogs-game:v1002-5" />
         </el-form-item>
       </el-form>
-      <div class="form-hint">
-        更新后会拉取新镜像并重新部署该实例的容器（先移除旧容器再按新镜像创建启动），启动参数、环境变量和端口映射保持不变。
-      </div>
+      <div class="form-hint">更新后会拉取新镜像并重新部署容器，启动参数、环境变量和端口映射保持不变。</div>
       <template #footer>
         <el-button @click="updateImageDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="updateImageSubmitting" @click="submitUpdateImage">更新</el-button>
@@ -1203,7 +1720,26 @@ onUnmounted(() => {
 .type-tab { display: flex; align-items: center; gap: 7px; flex-shrink: 0; padding: 11px 0 13px; background: transparent; border: 0; border-bottom: 2px solid transparent; color: var(--ops-text-secondary); font: inherit; font-size: 13px; cursor: pointer; }
 .type-tab.active { color: var(--ops-primary); border-bottom-color: var(--ops-primary); }
 .type-tab em { font-style: normal; font-size: 11px; padding: 1px 6px; background: var(--ops-bg); color: var(--ops-text-secondary); border-radius: 4px; }
-.instance-search { width: 205px; margin-left: auto; flex-shrink: 0; }
+.filter-actions { display: flex; align-items: center; gap: 9px; margin-left: auto; min-width: 0; }
+.bulk-task-panel { flex-shrink: 0; margin: 8px 0 10px; padding: 12px 14px; border: 1px solid var(--ops-border); border-radius: 9px; background: #fafcff; }
+.bulk-task-panel.task-succeeded { border-color: #d6eee4; background: #f7fcf9; }
+.bulk-task-panel.task-partial, .bulk-task-panel.task-failed { border-color: #f4d5d8; background: #fffafa; }
+.bulk-task-heading, .bulk-task-progress { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.bulk-task-heading > div { display: flex; align-items: baseline; gap: 9px; }
+.bulk-task-heading b { color: var(--ops-text); font-size: 13px; }
+.bulk-task-heading span, .bulk-task-progress > span { color: var(--ops-text-secondary); font-size: 11px; white-space: nowrap; }
+.bulk-task-progress { margin-top: 6px; }
+.bulk-task-progress .el-progress { flex: 1; min-width: 0; }
+.bulk-task-items { display: flex; flex-direction: column; gap: 6px; max-height: 130px; overflow: auto; margin-top: 6px; padding-top: 6px; border-top: 1px solid #e9edf3; }
+.bulk-task-item { display: grid; grid-template-columns: 7px minmax(75px, 1fr) auto; align-items: center; gap: 7px; color: var(--ops-text); font-size: 11px; }
+.bulk-task-dot { width: 7px; height: 7px; border-radius: 50%; background: #b7c0cd; }
+.bulk-task-dot.item-running { background: var(--ops-primary); box-shadow: 0 0 0 3px var(--ops-primary-light); }
+.bulk-task-dot.item-succeeded { background: var(--ops-success); }
+.bulk-task-dot.item-failed { background: var(--ops-danger); }
+.bulk-task-item-status { color: var(--ops-text-secondary); }
+.bulk-task-item small { grid-column: 2 / -1; color: var(--ops-danger); overflow-wrap: anywhere; }
+.bulk-task-poll-error { margin-top: 5px; color: var(--ops-warning); font-size: 11px; }
+.instance-search { width: 205px; flex-shrink: 0; }
 .instance-search :deep(.el-input__wrapper) { box-shadow: none; }
 .master-detail { flex: 1; display: flex; min-height: 0; overflow: hidden; }
 .instance-panel { display: flex; flex: 1; min-width: 0; min-height: 0; flex-direction: column; }
@@ -1235,6 +1771,38 @@ onUnmounted(() => {
 
 /* -------- 实例详情抽屉 -------- */
 :deep(.el-drawer__body) { padding: 0; overflow: hidden; }
+
+/* -------- 批量操作抽屉 -------- */
+.batch-operation-drawer { display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 0; color: var(--ops-text); background: #fff; }
+.batch-operation-header { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-shrink: 0; padding: 20px 22px 16px; border-bottom: 1px solid var(--ops-border); }
+.batch-operation-title-wrap { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.batch-operation-icon { display: grid; place-items: center; width: 38px; height: 38px; flex-shrink: 0; border-radius: 10px; color: var(--ops-primary); background: var(--ops-primary-light); font-size: 18px; }
+.batch-operation-title-text { min-width: 0; }
+.batch-operation-title-text h2 { margin: 0; color: var(--ops-text); font-size: 17px; font-weight: 650; line-height: 1.35; }
+.batch-operation-title-text p { overflow: hidden; margin: 4px 0 0; color: var(--ops-text-secondary); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.batch-operation-hint { flex-shrink: 0; margin: 14px 20px 0; padding: 10px 12px; border: 1px solid #e6edf7; border-radius: 8px; color: var(--ops-text-secondary); background: #f7f9fc; font-size: 12px; line-height: 1.5; }
+.batch-operation-controls { display: flex; flex-shrink: 0; gap: 9px; min-width: 0; margin: 12px 20px 0; padding: 11px; border: 1px solid #e8edf4; border-radius: 9px; background: #f9fafc; }
+.batch-operation-controls .el-select { flex: 0 0 190px; }
+.batch-operation-controls .el-input { flex: 1; min-width: 0; }
+.batch-operation-list-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-shrink: 0; margin: 17px 22px 10px; color: var(--ops-text); font-size: 13px; font-weight: 600; }
+.batch-operation-list-heading span:last-child { color: var(--ops-text-secondary); font-size: 12px; font-weight: 400; }
+.batch-operation-groups { display: flex; flex: 1; flex-direction: column; gap: 10px; min-height: 0; overflow-y: auto; padding: 0 20px 16px; scrollbar-color: #c5cfdd transparent; scrollbar-width: thin; }
+.batch-operation-groups::-webkit-scrollbar { width: 4px; }
+.batch-operation-groups::-webkit-scrollbar-thumb { border-radius: 4px; background: #c5cfdd; }
+.batch-operation-group { flex-shrink: 0; padding: 11px; border: 1px solid #e8edf4; border-radius: 9px; background: #fff; }
+.batch-operation-group-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 24px; }
+.batch-operation-group-heading > span { color: var(--ops-text-secondary); font-size: 11px; }
+.batch-operation-group-heading :deep(.el-checkbox__label) { color: var(--ops-text); font-size: 13px; font-weight: 600; }
+.batch-operation-instance-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(125px, 1fr)); gap: 7px; margin: 9px 0 0; }
+.batch-operation-instance-checkbox { display: flex; align-items: center; width: 100%; min-width: 0; height: auto; box-sizing: border-box; margin: 0; padding: 8px; border: 1px solid #e8edf4; border-radius: 7px; }
+.batch-operation-instance-checkbox:hover { background: #f7f9fc; }
+.batch-operation-instance-checkbox :deep(.el-checkbox__label) { display: block; flex: 1; min-width: 0; padding-left: 7px; white-space: normal; }
+.batch-operation-instance-content { display: block; width: 100%; min-width: 0; }
+.batch-operation-instance-name { display: block; overflow: hidden; color: var(--ops-text); font-size: 12px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.batch-operation-empty-group { margin: 8px 0 0; padding: 7px 0; color: var(--ops-text-secondary); font-size: 12px; }
+.batch-operation-footer { display: flex; flex-direction: column; gap: 12px; flex-shrink: 0; padding: 14px 20px; border-top: 1px solid var(--ops-border); background: #fff; }
+.batch-operation-footer-actions { display: flex; justify-content: flex-end; gap: 9px; }
+.batch-operation-footer-actions .el-button + .el-button { margin-left: 0; }
 
 .detail-panel {
   display: flex;
@@ -1321,6 +1889,38 @@ onUnmounted(() => {
 .view-all-events { display: block; margin-top: 14px; font-size: 13px; }
 
 .detail-empty { padding: 6px 0; color: var(--ops-text-secondary); font-size: 12.5px; }
+.resource-monitor { display: flex; flex-direction: column; gap: 12px; }
+.resource-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.resource-live-label { display: flex; align-items: center; gap: 7px; color: var(--ops-text); font-size: 12px; font-weight: 600; }
+.resource-live-label small { margin-left: 4px; color: var(--ops-text-secondary); font-size: 11px; font-weight: 400; }
+.resource-live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ops-success); box-shadow: 0 0 0 3px rgba(32, 167, 121, .12); }
+.resource-live-dot.stopped { background: #9aa6b5; box-shadow: 0 0 0 3px rgba(154, 166, 181, .12); }
+.resource-error { padding: 10px 12px; border: 1px solid #f3d8d8; border-radius: 7px; color: var(--ops-danger); background: #fff7f7; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.resource-metric-grid, .resource-secondary-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.resource-metric-card, .resource-secondary-card { min-width: 0; padding: 12px; border: 1px solid var(--ops-border); border-radius: 8px; background: #fff; }
+.resource-card-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--ops-text-secondary); font-size: 11px; }
+.resource-card-period { color: var(--ops-primary); font-size: 10px; }
+.resource-metric-value { margin-top: 8px; color: var(--ops-text); font-size: 23px; font-weight: 650; line-height: 1.25; font-variant-numeric: tabular-nums; }
+.resource-metric-value small { margin-left: 3px; color: var(--ops-text-secondary); font-size: 11px; font-weight: 400; }
+.resource-memory-value { overflow: hidden; font-size: 17px; text-overflow: ellipsis; white-space: nowrap; }
+.resource-memory-value small { font-size: 10px; }
+.resource-sparkline { display: block; width: 100%; height: 35px; margin-top: 7px; overflow: visible; }
+.resource-sparkline polyline { fill: none; stroke: var(--ops-primary); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.resource-sparkline.memory polyline { stroke: #19a77a; }
+.resource-direction { display: flex; justify-content: space-between; gap: 8px; margin-top: 10px; color: var(--ops-text-secondary); font-size: 11px; }
+.resource-direction strong { overflow: hidden; color: var(--ops-text); font-size: 11px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.resource-sample-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 2px; color: var(--ops-text-secondary); font-size: 10px; }
+.resource-sample-footer strong { margin-left: 4px; color: var(--ops-text); font-size: 11px; }
+.deployment-history { display: flex; flex-direction: column; gap: 10px; }
+.deployment-history-item { padding: 11px 12px; border: 1px solid var(--ops-border); border-radius: 8px; background: #fff; }
+.deployment-history-main { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.deployment-history-title { color: var(--ops-text); font-size: 13px; font-weight: 600; }
+.deployment-history-title span { font-family: Consolas, monospace; }
+.deployment-history-meta { margin-top: 4px; color: var(--ops-text-secondary); font-size: 11px; }
+.deployment-history-diff { margin-top: 8px; color: var(--ops-text-secondary); font-family: Consolas, monospace; font-size: 11px; overflow-wrap: anywhere; }
+.deployment-history-diff span { margin: 0 5px; color: var(--ops-primary); }
+.deployment-history-error { margin: 8px 0; color: var(--ops-danger); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.deployment-history-item .el-button { margin-top: 9px; }
 .note-text { line-height: 1.6; }
 
 .detail-list { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border-radius: 6px; background: #f6f8fa; }
@@ -1397,13 +1997,15 @@ onUnmounted(() => {
   .workspace-heading { gap: 12px; margin: -4px -4px 16px; padding: 14px; }
   .service-filter-bar { flex-wrap: wrap; gap: 0; }
   .type-tabs { width: 100%; }
-  .instance-search { width: 100%; margin: 4px 0; }
+  .filter-actions { width: 100%; margin: 4px 0; }
+  .instance-search { flex: 1; width: auto; min-width: 0; }
 }
 @media (max-width: 760px) {
   .instance-table { display: none; }
   .mobile-instance-list { display: block; flex: 1; min-height: 0; overflow-y: auto; }
   .mobile-instance { padding: 17px 2px; border-bottom: 1px solid var(--ops-border); }
-  .mobile-instance-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+  .mobile-instance-heading { display: flex; justify-content: space-between; align-items: center; gap: 9px; }
+  .mobile-instance-heading .instance-name { flex: 1; min-width: 0; }
   .mobile-instance-heading .instance-name { overflow-wrap: anywhere; }
   .mobile-instance .instance-secondary { margin-top: 7px; }
   .mobile-instance-bottom { display: flex; justify-content: space-between; align-items: center; margin-top: 9px; gap: 10px; }
@@ -1417,7 +2019,23 @@ onUnmounted(() => {
   .service-workspace { padding: 16px 14px 10px; }
   .workspace-heading { margin: -2px -2px 10px; padding: 12px; gap: 10px; }
   .workspace-actions { margin-left: 0; }
+  .bulk-task-panel { margin: 7px 0; padding: 10px; }
+  .bulk-task-progress { flex-wrap: wrap; }
+  .bulk-task-progress .el-progress { flex-basis: 100%; }
+  .bulk-task-progress > span { margin-left: auto; }
   .environment-tabs button { padding: 5px 8px; }
-  :deep(.el-drawer) { width: min(520px, 100vw) !important; }
+  :deep(.el-drawer) { width: min(560px, 100vw) !important; }
+  .resource-metric-grid, .resource-secondary-grid { gap: 7px; }
+  .resource-metric-card, .resource-secondary-card { padding: 10px; }
+  .resource-metric-value { font-size: 19px; }
+  .resource-memory-value { font-size: 14px; }
+  .resource-sample-footer { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .batch-operation-header { padding: 17px 16px 14px; }
+  .batch-operation-hint { margin-right: 14px; margin-left: 14px; }
+  .batch-operation-list-heading { margin-right: 16px; margin-left: 16px; }
+  .batch-operation-groups { padding-right: 14px; padding-left: 14px; }
+  .batch-operation-footer { padding: 12px 14px; }
+  .batch-operation-controls { flex-direction: column; }
+  .batch-operation-controls .el-select { flex: auto; width: 100%; }
 }
 </style>

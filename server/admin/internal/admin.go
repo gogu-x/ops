@@ -23,9 +23,10 @@ import (
 // AdminService owns the HTTP server lifecycle. Request handling is split by resource
 // into handler_*.go files so this type remains an infrastructure boundary.
 type AdminService struct {
-	auth *auth.Service
-	http *http.Server
-	app  *application.Service
+	auth       *auth.Service
+	http       *http.Server
+	app        *application.Service
+	operations *serviceOperationManager
 }
 
 // NewAdminService wires the admin actor's dependencies: a Mongo-backed auth
@@ -43,8 +44,9 @@ func NewAdminService(mongodbData *mongo.Database) *AdminService {
 		instance.NewMongoRepository(mongodbData),
 	)
 	return &AdminService{
-		auth: auth.NewService(authRepo),
-		app:  app,
+		auth:       auth.NewService(authRepo),
+		app:        app,
+		operations: newServiceOperationManager(app),
 	}
 }
 

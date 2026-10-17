@@ -23,7 +23,10 @@ func (is *InstanceService) registerHandlers() {
 	registerHandler(is.handlers, is.handleStatus)
 	registerHandler(is.handlers, is.handleDetail)
 	registerHandler(is.handlers, is.handleLogs)
+	registerHandler(is.handlers, is.handleResourceHistory)
 	registerHandler(is.handlers, is.handleListEvents)
+	registerHandler(is.handlers, is.handleListDeployments)
+	registerHandler(is.handlers, is.handleRollbackDeployment)
 }
 
 func registerHandler[T any](registry handlerRegistry, handler func(tree.Context, T)) {
@@ -42,12 +45,12 @@ func (is *InstanceService) handleEnrich(ctx tree.Context, request model.EnrichRe
 }
 
 func (is *InstanceService) handleDeploy(ctx tree.Context, request model.DeployRequest) {
-	result, err := is.deploy(request.ID)
+	result, err := is.deployWithMetadata(request.ID, request.Operator, "deploy")
 	ctx.Response(result, err)
 }
 
 func (is *InstanceService) handleUpdateImage(ctx tree.Context, request model.UpdateImageRequest) {
-	result, err := is.updateImage(request.ID, request.Image)
+	result, err := is.updateImageWithMetadata(request.ID, request.Image, request.Operator, "update_image")
 	ctx.Response(result, err)
 }
 
@@ -76,7 +79,22 @@ func (is *InstanceService) handleLogs(ctx tree.Context, request model.LogsReques
 	ctx.Response(model.LogsResponse{Logs: logs}, err)
 }
 
+func (is *InstanceService) handleResourceHistory(ctx tree.Context, request model.InstanceResourceHistoryRequest) {
+	history, err := is.resourceHistory(request.ID, request.Limit)
+	ctx.Response(history, err)
+}
+
 func (is *InstanceService) handleListEvents(ctx tree.Context, request model.ListEventsRequest) {
 	events, err := is.listEvents(request.ID, request.Limit)
 	ctx.Response(model.EventsResponse{Events: events}, err)
+}
+
+func (is *InstanceService) handleListDeployments(ctx tree.Context, request model.ListDeploymentsRequest) {
+	deployments, err := is.listDeployments(request.ID, request.Limit)
+	ctx.Response(model.DeploymentListResponse{Deployments: deployments}, err)
+}
+
+func (is *InstanceService) handleRollbackDeployment(ctx tree.Context, request model.RollbackDeploymentRequest) {
+	result, err := is.rollbackDeployment(request.ID, request.DeploymentID, request.Operator)
+	ctx.Response(result, err)
 }

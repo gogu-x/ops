@@ -23,6 +23,7 @@ func TestHostHandlersRegistered(t *testing.T) {
 		model.ContainerDeployRequest{},
 		model.ContainerActionRequest{},
 		model.ContainerLogsRequest{},
+		model.ContainerResourceStatsRequest{},
 		model.ImagePullRequest{},
 	}
 

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"time"
 
 	"github.com/docker/docker/api/types"
@@ -62,14 +63,77 @@ type ImagePullRequest struct {
 type ListResponse struct{ ServiceInstances []ServiceInstance }
 type EnrichRequest struct{ ServiceInstances []ServiceInstance }
 
-type DeployRequest struct{ ID string }
+type DeployRequest struct {
+	ID       string
+	Operator string
+}
+
+var ErrDeploymentUnavailable = errors.New("deployment version is not available for rollback")
 
 // UpdateImageRequest updates a service instance's image (e.g. to a new
 // version tag), pulls the new image on the instance's host, and redeploys
 // the container so it runs the updated image.
 type UpdateImageRequest struct {
+	ID       string
+	Image    string
+	Operator string
+}
+
+// ListDeploymentsRequest returns deployment attempts for one service instance.
+type ListDeploymentsRequest struct {
 	ID    string
-	Image string
+	Limit int
+}
+
+// RollbackDeploymentRequest redeploys an image from a previous successful deployment.
+type RollbackDeploymentRequest struct {
+	ID           string
+	DeploymentID string
+	Operator     string
+}
+
+// InstanceDeployment is the auditable result of deploying a version to an instance.
+type InstanceDeployment struct {
+	ID            string    `json:"id" bson:"_id"`
+	InstanceID    string    `json:"instance_id" bson:"instance_id"`
+	Operation     string    `json:"operation" bson:"operation"` // deploy | update_image | rollback
+	Image         string    `json:"image" bson:"image"`
+	PreviousImage string    `json:"previous_image,omitempty" bson:"previous_image,omitempty"`
+	Status        string    `json:"status" bson:"status"` // succeeded | failed
+	Operator      string    `json:"operator,omitempty" bson:"operator,omitempty"`
+	Message       string    `json:"message,omitempty" bson:"message,omitempty"`
+	CreatedAt     time.Time `json:"created_at" bson:"created_at"`
+}
+
+type DeploymentListResponse struct{ Deployments []InstanceDeployment }
+
+// ServiceInstanceBatchOperationRequest starts one operation for multiple service instances.
+type ServiceInstanceBatchOperationRequest struct {
+	InstanceIDs []string `json:"instance_ids" binding:"required,min=1"`
+	Action      string   `json:"action" binding:"required"` // deploy | start | stop | restart | update_image
+	Image       string   `json:"image,omitempty"`
+}
+
+// ServiceInstanceOperationItem tracks an individual instance in a batch task.
+type ServiceInstanceOperationItem struct {
+	InstanceID string `json:"instance_id"`
+	Name       string `json:"name"`
+	Status     string `json:"status"` // pending | running | succeeded | failed
+	Error      string `json:"error,omitempty"`
+}
+
+// ServiceInstanceOperation is the live progress projection returned by task APIs.
+type ServiceInstanceOperation struct {
+	ID        string                         `json:"id"`
+	Action    string                         `json:"action"`
+	Status    string                         `json:"status"` // pending | running | succeeded | partial | failed
+	Total     int                            `json:"total"`
+	Completed int                            `json:"completed"`
+	Succeeded int                            `json:"succeeded"`
+	Failed    int                            `json:"failed"`
+	Items     []ServiceInstanceOperationItem `json:"items"`
+	CreatedAt time.Time                      `json:"created_at"`
+	UpdatedAt time.Time                      `json:"updated_at"`
 }
 
 // InstanceContainerActionRequest performs start/stop/restart/remove on the
@@ -142,6 +206,8 @@ const (
 	EventDeployFailed           = "deploy_failed"
 	EventUpdateImageSucceeded   = "update_image_succeeded"
 	EventUpdateImageFailed      = "update_image_failed"
+	EventRollbackSucceeded      = "rollback_succeeded"
+	EventRollbackFailed         = "rollback_failed"
 	EventContainerStarted       = "container_started"
 	EventContainerStartFailed   = "container_start_failed"
 	EventContainerStopped       = "container_stopped"

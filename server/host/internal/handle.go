@@ -29,6 +29,7 @@ func (a *DockerService) registerHandlers() {
 	registerHandler(a.handlers, a.handleContainerDeploy)
 	registerHandler(a.handlers, a.handleContainerAction)
 	registerHandler(a.handlers, a.handleContainerLogs)
+	registerHandler(a.handlers, a.handleContainerResourceStats)
 	registerHandler(a.handlers, a.handleImagePull)
 }
 
@@ -118,6 +119,11 @@ func (a *DockerService) handleContainerAction(ctx tree.Context, request model.Co
 
 func (a *DockerService) handleContainerLogs(ctx tree.Context, request model.ContainerLogsRequest) {
 	result, err := a.containerLogs(request.HostID, request.ContainerID, request.Tail)
+	ctx.Response(result, err)
+}
+
+func (a *DockerService) handleContainerResourceStats(ctx tree.Context, request model.ContainerResourceStatsRequest) {
+	result, err := a.containerResourceStats(request.HostID, request.ContainerID)
 	ctx.Response(result, err)
 }
 

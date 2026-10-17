@@ -56,6 +56,58 @@ export interface ContainerDetail {
   created: string
 }
 
+export interface ContainerResourceMetrics {
+  cpu_percent: number
+  memory_usage: number
+  memory_limit: number
+  memory_percent: number
+  network_rx_bytes: number
+  network_tx_bytes: number
+  block_read_bytes: number
+  block_write_bytes: number
+  processes: number
+  sampled_at: string
+}
+
+export interface ContainerResourceHistory {
+  latest: ContainerResourceMetrics | null
+  samples: ContainerResourceMetrics[]
+}
+
+export interface InstanceDeployment {
+  id: string
+  instance_id: string
+  operation: 'deploy' | 'update_image' | 'rollback' | string
+  image: string
+  previous_image?: string
+  status: 'succeeded' | 'failed' | string
+  operator?: string
+  message?: string
+  created_at: string
+}
+
+export type BatchAction = 'deploy' | 'start' | 'stop' | 'restart' | 'update_image'
+
+export interface ServiceInstanceOperationItem {
+  instance_id: string
+  name: string
+  status: 'pending' | 'running' | 'succeeded' | 'failed'
+  error?: string
+}
+
+export interface ServiceInstanceOperation {
+  id: string
+  action: BatchAction
+  status: 'running' | 'succeeded' | 'partial' | 'failed'
+  total: number
+  completed: number
+  succeeded: number
+  failed: number
+  items: ServiceInstanceOperationItem[]
+  created_at: string
+  updated_at: string
+}
+
 interface ApiResponse<T> {
   ok: boolean
   data: T
@@ -89,6 +141,11 @@ export const instanceApi = {
 
   async detail(id: string): Promise<ContainerDetail> {
     const response = await api.get<ApiResponse<ContainerDetail>>(`/service-instances/${encodeURIComponent(id)}/detail`)
+    return response.data.data
+  },
+
+  async resources(id: string, limit = 60): Promise<ContainerResourceHistory> {
+    const response = await api.get<ApiResponse<ContainerResourceHistory>>(`/service-instances/${encodeURIComponent(id)}/resources`, { params: { limit } })
     return response.data.data
   },
 
@@ -128,5 +185,33 @@ export const instanceApi = {
 
   async removeContainer(id: string): Promise<void> {
     await api.delete(`/service-instances/${encodeURIComponent(id)}/container`)
+  },
+
+  async deployments(id: string, limit = 30): Promise<InstanceDeployment[]> {
+    const response = await api.get<ApiResponse<InstanceDeployment[]>>(`/service-instances/${encodeURIComponent(id)}/deployments`, { params: { limit } })
+    return response.data.data || []
+  },
+
+  async rollback(id: string, deploymentId: string): Promise<ServiceInstance> {
+    const response = await api.post<ApiResponse<ServiceInstance>>(
+      `/service-instances/${encodeURIComponent(id)}/deployments/${encodeURIComponent(deploymentId)}/rollback`,
+      undefined,
+      { timeout: 120000 },
+    )
+    return response.data.data
+  },
+
+  async startBatchOperation(instanceIds: string[], action: BatchAction, image?: string): Promise<ServiceInstanceOperation> {
+    const response = await api.post<ApiResponse<ServiceInstanceOperation>>('/service-instances/batch-operations', {
+      instance_ids: instanceIds,
+      action,
+      ...(image ? { image } : {}),
+    })
+    return response.data.data
+  },
+
+  async operation(id: string): Promise<ServiceInstanceOperation> {
+    const response = await api.get<ApiResponse<ServiceInstanceOperation>>(`/service-instance-operations/${encodeURIComponent(id)}`)
+    return response.data.data
   },
 }

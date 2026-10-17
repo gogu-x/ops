@@ -31,8 +31,10 @@ func NewInstanceService(mongodbData *mongo.Database) *internal.InstanceService {
 	if mongodbData == nil {
 		return internal.NewInstanceService()
 	}
-	return internal.NewInstanceServiceWithEvents(
+	return internal.NewInstanceServiceWithMonitoring(
 		internal.NewMongoRepository(mongodbData),
 		internal.NewMongoEventRepository(mongodbData),
+		internal.NewMongoDeploymentRepository(mongodbData),
+		internal.NewMongoResourceMetricsRepository(mongodbData),
 	)
 }

@@ -173,7 +173,7 @@ func findContainerForInstance(containers []types.Container, instanceID string) (
 }
 
 func (a *InstanceService) deploy(id string) (model.ServiceInstance, error) {
-	return a.deployWithEvent(id, true)
+	return a.deployWithMetadata(id, "", "deploy")
 }
 
 // deployWithEvent implements deploy, optionally suppressing the
@@ -181,14 +181,24 @@ func (a *InstanceService) deploy(id string) (model.ServiceInstance, error) {
 // calls this internally via redeploy and records its own
 // container_restarted/container_restart_failed event instead).
 func (a *InstanceService) deployWithEvent(id string, recordDeployEvent bool) (model.ServiceInstance, error) {
+	return a.deployWithEventAs(id, recordDeployEvent, "", "deploy")
+}
+
+func (a *InstanceService) deployWithEventAs(id string, recordDeployEvent bool, operator, operation string) (model.ServiceInstance, error) {
 	item, err := a.repo.Get(bgCtx(), id)
 	if err != nil {
 		return model.ServiceInstance{}, err
 	}
 	if strings.TrimSpace(item.HostID) == "" {
-		return model.ServiceInstance{}, ErrHostUnresolved
+		err := ErrHostUnresolved
+		a.recordDeployment(id, operation, item.Image, item.Image, operator, err)
+		if recordDeployEvent {
+			a.recordEvent(id, model.EventDeployFailed, err.Error())
+		}
+		return model.ServiceInstance{}, err
 	}
 	result, err := a.redeploy(item, item.HostID)
+	a.recordDeployment(id, operation, item.Image, item.Image, operator, err)
 	if !recordDeployEvent {
 		return result, err
 	}
@@ -200,12 +210,20 @@ func (a *InstanceService) deployWithEvent(id string, recordDeployEvent bool) (mo
 	return result, err
 }
 
+func (a *InstanceService) deployWithMetadata(id, operator, operation string) (model.ServiceInstance, error) {
+	return a.deployWithEventAs(id, true, operator, operation)
+}
+
 // updateImage changes a service instance's image tag, persists it, pulls
 // the new image onto the instance's host, and redeploys the container so
 // it picks up the new version. If the pull or redeploy fails, the image
 // change is still persisted (so retrying "更新镜像" doesn't require
 // re-entering the tag), but the instance is left in an error state.
 func (a *InstanceService) updateImage(id, newImage string) (model.ServiceInstance, error) {
+	return a.updateImageWithMetadata(id, newImage, "", "update_image")
+}
+
+func (a *InstanceService) updateImageWithMetadata(id, newImage, operator, operation string) (model.ServiceInstance, error) {
 	newImage = strings.TrimSpace(newImage)
 	if newImage == "" {
 		return model.ServiceInstance{}, errors.New("image is required")
@@ -215,27 +233,53 @@ func (a *InstanceService) updateImage(id, newImage string) (model.ServiceInstanc
 		return model.ServiceInstance{}, err
 	}
 	if strings.TrimSpace(item.HostID) == "" {
-		return model.ServiceInstance{}, ErrHostUnresolved
+		err := ErrHostUnresolved
+		a.recordDeployment(id, operation, newImage, item.Image, operator, err)
+		a.recordImageOperationEvent(id, operation, false, err.Error())
+		return model.ServiceInstance{}, err
 	}
+	previousImage := item.Image
 	hostID := item.HostID
+	if previousImage != newImage {
+		if _, err := a.lookupContainerID(hostID, item); err == nil {
+			a.recordDeploymentBaseline(id, previousImage)
+		}
+	}
 	item.Image = newImage
 	item.UpdatedAt = time.Now().UTC()
 	if err := a.repo.Update(bgCtx(), item); err != nil {
+		a.recordDeployment(id, operation, newImage, previousImage, operator, err)
+		a.recordImageOperationEvent(id, operation, false, err.Error())
 		return model.ServiceInstance{}, err
 	}
 	if _, err := hostRequest(model.ImagePullRequest{HostID: hostID, Image: newImage}); err != nil {
 		item.Status = model.StatusError
 		item.DeployError = fmt.Sprintf("pull image: %s", err.Error())
-		a.recordEvent(id, model.EventUpdateImageFailed, fmt.Sprintf("拉取镜像 %s 失败: %s", newImage, err.Error()))
+		a.recordDeployment(id, operation, newImage, previousImage, operator, err)
+		a.recordImageOperationEvent(id, operation, false, fmt.Sprintf("拉取镜像 %s 失败: %s", newImage, err.Error()))
 		return item, fmt.Errorf("pull image %s: %w", newImage, err)
 	}
 	result, err := a.redeploy(item, hostID)
-	if err != nil {
-		a.recordEvent(id, model.EventUpdateImageFailed, err.Error())
-	} else {
-		a.recordEvent(id, model.EventUpdateImageSucceeded, fmt.Sprintf("镜像已更新为 %s 并重新部署", newImage))
-	}
+	a.recordDeployment(id, operation, newImage, previousImage, operator, err)
+	a.recordImageOperationEvent(id, operation, err == nil, fmt.Sprintf("镜像已更新为 %s 并重新部署", newImage))
 	return result, err
+}
+
+func (a *InstanceService) recordImageOperationEvent(id, operation string, succeeded bool, message string) {
+	switch operation {
+	case "rollback":
+		if succeeded {
+			a.recordEvent(id, model.EventRollbackSucceeded, message)
+		} else {
+			a.recordEvent(id, model.EventRollbackFailed, message)
+		}
+	default:
+		if succeeded {
+			a.recordEvent(id, model.EventUpdateImageSucceeded, message)
+		} else {
+			a.recordEvent(id, model.EventUpdateImageFailed, message)
+		}
+	}
 }
 
 // redeploy removes any existing container for the instance (matched by the
@@ -277,7 +321,7 @@ func (a *InstanceService) redeploy(item model.ServiceInstance, hostID string) (m
 // params, env text, port mappings) made since the last deploy.
 func (a *InstanceService) containerAction(id, action string) error {
 	if action == "restart" {
-		_, err := a.deployWithEvent(id, false)
+		_, err := a.deployWithEventAs(id, false, "", "restart")
 		if err != nil {
 			a.recordEvent(id, model.EventContainerRestartFailed, err.Error())
 		} else {

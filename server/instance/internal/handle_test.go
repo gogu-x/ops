@@ -18,7 +18,10 @@ func TestInstanceHandlersRegistered(t *testing.T) {
 		model.StatusRequest{},
 		model.DetailRequest{},
 		model.LogsRequest{},
+		model.InstanceResourceHistoryRequest{},
 		model.ListEventsRequest{},
+		model.ListDeploymentsRequest{},
+		model.RollbackDeploymentRequest{},
 	}
 
 	if len(service.handlers) != len(requests) {
