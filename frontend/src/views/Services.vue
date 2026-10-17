@@ -862,17 +862,33 @@ let resourceRequestId = 0
 let resourceInFlight = false
 let resourceRefreshTimer: ReturnType<typeof setInterval> | null = null
 
-const cpuSparkline = computed(() => sparklinePoints((resourceHistory.value?.samples || []).map((sample) => sample.cpu_percent)))
-const memorySparkline = computed(() => sparklinePoints((resourceHistory.value?.samples || []).map((sample) => sample.memory_percent)))
+const cpuSparkline = computed(() => sparklineSeries((resourceHistory.value?.samples || []).map((sample) => sample.cpu_percent)))
+const memorySparkline = computed(() => sparklineSeries((resourceHistory.value?.samples || []).map((sample) => sample.memory_percent)))
 
-function sparklinePoints(values: number[]): string {
-  if (!values.length) return ''
-  const maxValue = Math.max(100, ...values)
-  return values.map((value, index) => {
-    const x = values.length === 1 ? 100 : index / (values.length - 1) * 100
-    const y = 28 - Math.min(1, value / maxValue) * 24
-    return `${x},${y}`
-  }).join(' ')
+function sparklineSeries(values: number[]): { points: string; singlePoint: boolean; pointX: number; pointY: number } {
+  const samples = values.filter(Number.isFinite).map((value) => Math.max(0, value))
+  if (!samples.length) return { points: '', singlePoint: false, pointX: 0, pointY: 0 }
+
+  const minValue = Math.min(...samples)
+  const maxValue = Math.max(...samples)
+  const spread = maxValue - minValue
+  const padding = spread > 0 ? spread * 0.12 : Math.max(maxValue * 0.1, 1)
+  const minScale = Math.max(0, minValue - padding)
+  const maxScale = maxValue + padding
+  const chartTop = 5
+  const chartBottom = 25
+  const pointY = (value: number) => chartBottom - (value - minScale) / (maxScale - minScale) * (chartBottom - chartTop)
+  const coordinates = samples.map((value, index) => {
+    const x = samples.length === 1 ? 50 : index / (samples.length - 1) * 100
+    return { x, y: pointY(value) }
+  })
+
+  return {
+    points: coordinates.map(({ x, y }) => `${x},${y}`).join(' '),
+    singlePoint: coordinates.length === 1,
+    pointX: coordinates[0].x,
+    pointY: coordinates[0].y,
+  }
 }
 
 function formatBytes(value?: number): string {
@@ -1438,12 +1454,18 @@ onUnmounted(() => {
                       <article class="resource-metric-card">
                         <div class="resource-card-heading"><span>CPU 使用率</span><span class="resource-card-period">实时</span></div>
                         <div class="resource-metric-value">{{ resourceMetrics.cpu_percent.toFixed(1) }}<small>%</small></div>
-                        <svg class="resource-sparkline" viewBox="0 0 100 30" preserveAspectRatio="none" aria-label="CPU 使用趋势"><polyline :points="cpuSparkline" /></svg>
+                        <svg class="resource-sparkline" viewBox="0 0 100 30" preserveAspectRatio="none" aria-label="CPU 使用趋势">
+                          <polyline :points="cpuSparkline.points" />
+                          <circle v-if="cpuSparkline.singlePoint" :cx="cpuSparkline.pointX" :cy="cpuSparkline.pointY" r="2.5" />
+                        </svg>
                       </article>
                       <article class="resource-metric-card">
                         <div class="resource-card-heading"><span>内存使用</span><span class="resource-card-period">{{ resourceMetrics.memory_percent.toFixed(1) }}%</span></div>
                         <div class="resource-metric-value resource-memory-value">{{ formatBytes(resourceMetrics.memory_usage) }}<small>/ {{ formatBytes(resourceMetrics.memory_limit) }}</small></div>
-                        <svg class="resource-sparkline memory" viewBox="0 0 100 30" preserveAspectRatio="none" aria-label="内存使用趋势"><polyline :points="memorySparkline" /></svg>
+                        <svg class="resource-sparkline memory" viewBox="0 0 100 30" preserveAspectRatio="none" aria-label="内存使用趋势">
+                          <polyline :points="memorySparkline.points" />
+                          <circle v-if="memorySparkline.singlePoint" :cx="memorySparkline.pointX" :cy="memorySparkline.pointY" r="2.5" />
+                        </svg>
                       </article>
                     </div>
                     <div class="resource-secondary-grid">
@@ -1906,7 +1928,9 @@ onUnmounted(() => {
 .resource-memory-value small { font-size: 10px; }
 .resource-sparkline { display: block; width: 100%; height: 35px; margin-top: 7px; overflow: visible; }
 .resource-sparkline polyline { fill: none; stroke: var(--ops-primary); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.resource-sparkline circle { fill: var(--ops-primary); }
 .resource-sparkline.memory polyline { stroke: #19a77a; }
+.resource-sparkline.memory circle { fill: #19a77a; }
 .resource-direction { display: flex; justify-content: space-between; gap: 8px; margin-top: 10px; color: var(--ops-text-secondary); font-size: 11px; }
 .resource-direction strong { overflow: hidden; color: var(--ops-text); font-size: 11px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .resource-sample-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 2px; color: var(--ops-text-secondary); font-size: 10px; }
