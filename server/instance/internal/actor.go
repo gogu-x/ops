@@ -20,9 +20,9 @@ type InstanceService struct {
 	handlers        handlerRegistry
 	collectorCancel context.CancelFunc
 	collectorCtx    context.Context
-	resourceSystem  *tree.Tree
-	resourceSelf    tree.PID
-	resourceTimer   *treetimer.TimeWheel
+
+	resourceSelf  tree.PID
+	resourceTimer *treetimer.TimeWheel
 }
 
 func NewInstanceService(repositories ...Repository) *InstanceService {

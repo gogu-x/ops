@@ -26,9 +26,8 @@ type resourceCollectionTarget struct {
 }
 
 func (is *InstanceService) startResourceCollector(actorCtx tree.Context) {
-	is.resourceSystem = actorCtx.System()
 	is.resourceSelf = actorCtx.Self()
-	wheel := treetimer.NewTimeWheel(1, is.resourceSelf, is.resourceSystem)
+	wheel := treetimer.NewTimeWheel(1, is.resourceSelf)
 	is.resourceTimer = wheel
 	wheel.Register(resourceCollectionTimerType, is.handleResourceCollectionTimer)
 
@@ -50,7 +49,7 @@ func (is *InstanceService) runResourceCollection(ctx context.Context) {
 	is.collectResourceSamples(ctx)
 	// Re-arm from the actor goroutine after collection completes, so slow
 	// collection runs cannot overlap and timer operations stay actor-bound.
-	is.resourceSystem.SendCallback(is.resourceSelf, is.handleResourceCollectionComplete, nil, nil)
+	tree.SendCallback(is.resourceSelf, is.handleResourceCollectionComplete, nil, nil)
 }
 
 func (is *InstanceService) handleResourceCollectionComplete(_ tree.Context, _ interface{}, _ error) {

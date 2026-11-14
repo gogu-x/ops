@@ -36,7 +36,7 @@ func main() {
 				instance.NewInstanceService(mongodbData),
 			)
 			tree.Spawn(actors...)
-			tree.Default().Start()
+			tree.Start()
 			return nil
 		},
 	}
