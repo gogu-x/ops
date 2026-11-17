@@ -114,6 +114,10 @@ func (a *AdminService) createRollout(c *gin.Context) {
 		}
 		selected = append(selected, live)
 	}
+	if !rolloutHasSingleServiceType(selected) {
+		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "一个滚动发布任务只能包含同一服务类型的实例"})
+		return
+	}
 	projectID := ""
 	for _, item := range selected {
 		typeConfig, ok := typeByID[item.ServiceTypeID]
@@ -337,4 +341,17 @@ func (a *AdminService) retryFailedRollout(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func rolloutHasSingleServiceType(instances []model.ServiceInstance) bool {
+	if len(instances) == 0 {
+		return false
+	}
+	serviceTypeID := instances[0].ServiceTypeID
+	for _, instance := range instances[1:] {
+		if instance.ServiceTypeID != serviceTypeID {
+			return false
+		}
+	}
+	return true
 }

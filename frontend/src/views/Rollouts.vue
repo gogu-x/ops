@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Plus, Refresh } from '@element-plus/icons-vue'
 import AppLayout from '../components/AppLayout.vue'
 import { useAuthStore } from '../stores/auth'
 import { projectApi, type Project } from '../api/projects'
@@ -36,10 +37,13 @@ const submitting = ref(false)
 const probeSubmitting = ref(false)
 const probeDialogVisible = ref(false)
 const editingProbeTypeID = ref('')
+const createVisible = ref(false)
+const detailVisible = ref(false)
 const rolloutDetail = ref<RolloutDetail | null>(null)
 const rolloutHistory = ref<RolloutJob[]>([])
-const pollError = ref('')
 const historyLoading = ref(false)
+const pollError = ref('')
+let refreshTimer: ReturnType<typeof setInterval> | undefined
 const rolloutForm = reactive({
   action: 'update_image' as RolloutAction,
   image: '',
@@ -49,10 +53,6 @@ const rolloutForm = reactive({
   health_timeout_seconds: 300,
 })
 const probeForm = reactive<{ type: ProbeType; port: number; path: string }>({ type: '', port: 0, path: '/health' })
-const storageKey = 'ops_rollout_job_id'
-let pollTimer: ReturnType<typeof setInterval> | null = null
-let pollBusy = false
-let disposed = false
 
 const typesByID = computed(() => {
   const result = new Map<string, ServiceType>()
@@ -66,8 +66,6 @@ const hostsByID = computed(() => {
 })
 const projectEnvironments = computed(() => environments.value.filter((item) => item.project_id === selectedProjectID.value))
 const projectTypes = computed(() => serviceTypes.value.filter((item) => item.project_id === selectedProjectID.value))
-const activeTask = computed(() => rolloutDetail.value?.job || null)
-const taskInProgress = computed(() => Boolean(activeTask.value && ['queued', 'running', 'paused'].includes(activeTask.value.status)))
 const selectedSet = computed(() => new Set(selectedIDs.value))
 const selectedInstances = computed(() => instances.value.filter((item) => selectedSet.value.has(item.id)))
 const projectInstances = computed(() => {
@@ -80,7 +78,7 @@ const filteredInstances = computed(() => {
     const type = typesByID.value.get(item.service_type_id)
     const host = hostsByID.value.get(item.host_id)
     if (selectedEnvironmentID.value && type?.environment_id !== selectedEnvironmentID.value) return false
-    if (selectedTypeID.value && item.service_type_id !== selectedTypeID.value) return false
+    if (!selectedTypeID.value || item.service_type_id !== selectedTypeID.value) return false
     if (!query) return true
     const searchable = [item.name, item.image, item.note, item.rollout_group, type?.name, host?.name, host?.region, host?.zone]
     return searchable.some((value) => value?.toLocaleLowerCase().includes(query))
@@ -99,9 +97,6 @@ const targetGroups = computed<RolloutTargetGroup[]>(() => {
   }
   return [...grouped.values()].sort((left, right) => left.name.localeCompare(right.name))
 })
-const historyForProject = computed(() => selectedProjectID.value
-  ? rolloutHistory.value.filter((job) => job.project_id === selectedProjectID.value)
-  : rolloutHistory.value)
 const selectedServiceTypes = computed(() => {
   const ids = new Set(selectedInstances.value.map((item) => item.service_type_id))
   return [...ids].map((id) => typesByID.value.get(id)).filter((item): item is ServiceType => Boolean(item))
@@ -116,6 +111,7 @@ watch(selectedProjectID, (id) => {
 })
 
 watch(selectedEnvironmentID, () => { selectedTypeID.value = '' })
+watch(selectedTypeID, () => { selectedIDs.value = [] })
 watch(() => rolloutForm.max_parallel, (value) => {
   if (rolloutForm.max_parallel_per_group > value) rolloutForm.max_parallel_per_group = value
 })
@@ -293,12 +289,12 @@ async function loadData() {
   }
 }
 
-async function refreshHistory() {
-  historyLoading.value = true
+async function refreshHistory(silent = false) {
+  if (!silent) historyLoading.value = true
   try {
     rolloutHistory.value = await rolloutApi.list(100)
   } catch (error: any) {
-    ElMessage.error(error?.response?.data?.error || '读取滚动发布历史失败')
+    if (!silent) ElMessage.error(error?.response?.data?.error || '读取滚动发布历史失败')
   } finally {
     historyLoading.value = false
   }
@@ -312,73 +308,33 @@ function taskProgress(detail: RolloutDetail) {
   return detail.job.total ? Math.round((detail.job.completed / detail.job.total) * 100) : 0
 }
 
-function stopPolling() {
-  if (pollTimer) clearInterval(pollTimer)
-  pollTimer = null
+async function loadTask(id: string) {
+  try { rolloutDetail.value = await rolloutApi.detail(id); pollError.value = '' }
+  catch (error: any) { pollError.value = error?.response?.data?.error || '读取任务详情失败' }
 }
-
-function startPolling(id: string) {
-  stopPolling()
-  sessionStorage.setItem(storageKey, id)
-  const poll = async () => {
-    if (pollBusy || disposed) return
-    pollBusy = true
-    try {
-      const detail = await rolloutApi.detail(id)
-      rolloutDetail.value = detail
-      pollError.value = ''
-      if (!['queued', 'running'].includes(detail.job.status)) {
-        stopPolling()
-        await refreshHistory()
-        await loadData()
-      }
-    } catch (error: any) {
-      pollError.value = error?.response?.data?.error || '读取任务进度失败，将自动重试'
-      if (error?.response?.status === 404) stopPolling()
-    } finally {
-      pollBusy = false
-    }
-  }
-  void poll()
-  pollTimer = setInterval(() => void poll(), 2500)
+async function showTask(job: RolloutJob) {
+  rolloutDetail.value = null
+  detailVisible.value = true
+  await loadTask(job.id)
 }
-
-async function loadTask(id: string, poll = true) {
-  try {
-    const detail = await rolloutApi.detail(id)
-    rolloutDetail.value = detail
-    sessionStorage.setItem(storageKey, id)
-    if (poll && ['queued', 'running'].includes(detail.job.status)) startPolling(id)
-    else stopPolling()
-  } catch (error: any) {
-    ElMessage.error(error?.response?.data?.error || '读取滚动发布任务失败')
-  }
-}
-
-async function loadInitialTask() {
-  await refreshHistory()
-  const savedID = sessionStorage.getItem(storageKey)
-  const active = rolloutHistory.value.find((job) => ['queued', 'running', 'paused'].includes(job.status))
-  const targetID = active?.id || ((savedID && rolloutHistory.value.some((job) => job.id === savedID)) ? savedID : undefined)
-  if (targetID) await loadTask(targetID)
-}
-
 async function controlTask(action: 'pause' | 'resume' | 'retry') {
-  const job = activeTask.value
+  const job = rolloutDetail.value?.job
   if (!job) return
   try {
     if (action === 'pause') await rolloutApi.pause(job.id, '操作员暂停')
     else if (action === 'resume') await rolloutApi.resume(job.id)
     else await rolloutApi.retryFailed(job.id)
-    await loadTask(job.id, true)
-    ElMessage.success(action === 'pause' ? '已请求暂停；当前派发中的实例会先结束本步' : action === 'resume' ? '任务已续跑' : '失败项已重新排队')
-  } catch (error: any) {
-    ElMessage.error(error?.response?.data?.error || '任务控制失败')
-  }
+    await Promise.all([loadTask(job.id), refreshHistory()])
+    ElMessage.success('任务操作已提交')
+  } catch (error: any) { ElMessage.error(error?.response?.data?.error || '任务操作失败') }
 }
 
 async function createRollout() {
-  if (!canManage.value || submitting.value || taskInProgress.value) return
+  if (!canManage.value || submitting.value) return
+  if (new Set(selectedInstances.value.map((item) => item.service_type_id)).size > 1) {
+    ElMessage.warning('一个滚动发布任务只能选择同一服务类型')
+    return
+  }
   if (!selectedInstances.value.length) {
     ElMessage.warning('请先选择目标实例')
     return
@@ -407,7 +363,7 @@ async function createRollout() {
   }
   submitting.value = true
   try {
-    const detail = await rolloutApi.create({
+    await rolloutApi.create({
       instance_ids: selectedInstances.value.map((item) => item.id),
       action: rolloutForm.action,
       ...(image ? { image } : {}),
@@ -416,11 +372,10 @@ async function createRollout() {
       max_parallel_per_group: rolloutForm.max_parallel_per_group,
       health_timeout_seconds: rolloutForm.health_timeout_seconds,
     })
-    rolloutDetail.value = detail
     selectedIDs.value = []
     rolloutForm.image = ''
+    createVisible.value = false
     ElMessage.success('滚动发布任务已创建，后台将持久化推进')
-    startPolling(detail.job.id)
     await refreshHistory()
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.error || '创建滚动发布任务失败')
@@ -429,43 +384,47 @@ async function createRollout() {
   }
 }
 
-async function selectHistoryJob(job: RolloutJob) {
-  await loadTask(job.id, ['queued', 'running'].includes(job.status))
-}
-
 onMounted(async () => {
-  await loadData()
-  await loadInitialTask()
+  await Promise.all([loadData(), refreshHistory()])
+  refreshTimer = setInterval(() => {
+    if (rolloutHistory.value.some(job => ['queued', 'running'].includes(job.status))) void refreshHistory(true)
+    if (detailVisible.value && rolloutDetail.value && ['queued', 'running'].includes(rolloutDetail.value.job.status)) void loadTask(rolloutDetail.value.job.id)
+  }, 5000)
 })
-
-onUnmounted(() => {
-  disposed = true
-  stopPolling()
-})
+onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
 </script>
 
 <template>
   <AppLayout>
-    <div class="rollouts-page" v-loading="loading">
-      <header class="rollouts-header">
-        <div>
-          <div class="rollouts-breadcrumb">服务 <span>/</span> 滚动发布</div>
-          <h1>滚动发布</h1>
-          <p>按机房、可用区和服组分波，健康检查通过后自动推进；任务状态和审计记录保存在 Ops 数据库。</p>
-        </div>
-        <el-button plain :loading="loading" @click="loadData">刷新服务数据</el-button>
-      </header>
-
+    <div class="page-content-loading rollouts-page" v-loading="loading">
+      <div class="page-heading page-heading-modern page-heading-actions-only">
+        <el-button :icon="Refresh" :loading="historyLoading" @click="refreshHistory()">刷新</el-button>
+        <el-button v-if="canManage" type="primary" :icon="Plus" @click="createVisible = true">创建任务</el-button>
+      </div>
       <el-alert v-if="loadError" :title="loadError" type="error" show-icon :closable="false" />
-
+      <section class="task-list">
+        <header class="task-list-header"><div><h2>任务列表</h2><p>最近 100 个任务</p></div></header>
+        <el-table :data="rolloutHistory" class="rollout-table" v-loading="historyLoading" empty-text="暂无滚动发布任务" @row-click="showTask">
+          <el-table-column label="任务类型" min-width="140"><template #default="{ row }">{{ row.action === 'restart' ? '滚动重启' : '滚动更新镜像' }}</template></el-table-column>
+          <el-table-column label="项目" min-width="120"><template #default="{ row }">{{ projects.find(item => item.id === row.project_id)?.name || row.project_id }}</template></el-table-column>
+          <el-table-column prop="image" label="目标镜像" min-width="200" show-overflow-tooltip />
+          <el-table-column label="状态" width="110"><template #default="{ row }"><el-tag size="small" :type="row.status === 'succeeded' ? 'success' : row.status === 'failed' ? 'danger' : ['paused', 'partial'].includes(row.status) ? 'warning' : 'info'">{{ taskStatusLabel(row.status) }}</el-tag></template></el-table-column>
+          <el-table-column label="进度" width="110"><template #default="{ row }">{{ row.completed }} / {{ row.total }}</template></el-table-column>
+          <el-table-column prop="operator" label="操作人" width="110" />
+          <el-table-column label="创建时间" min-width="180"><template #default="{ row }">{{ new Date(row.created_at).toLocaleString() }}</template></el-table-column>
+          <el-table-column label="操作" width="90"><template #default="{ row }"><el-button text type="primary" @click.stop="showTask(row)">详情</el-button></template></el-table-column>
+        </el-table>
+      </section>
+      <el-dialog v-model="createVisible" title="创建滚动发布任务" width="min(1400px, 94vw)" class="create-dialog" destroy-on-close>
+        <div class="create-dialog-content">
       <section class="rollout-filter-bar">
-        <el-select v-model="selectedProjectID" placeholder="选择项目" aria-label="筛选项目" style="min-width: 190px">
+        <el-select v-model="selectedProjectID" placeholder="选择项目" aria-label="筛选项目" style="width: 190px">
           <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
         </el-select>
-        <el-select v-model="selectedEnvironmentID" clearable placeholder="全部环境" aria-label="筛选环境" style="min-width: 150px">
+        <el-select v-model="selectedEnvironmentID" clearable placeholder="全部环境" aria-label="筛选环境" style="width: 150px">
           <el-option v-for="environment in projectEnvironments" :key="environment.id" :label="environment.name" :value="environment.id" />
         </el-select>
-        <el-select v-model="selectedTypeID" clearable placeholder="全部服务类型" aria-label="筛选服务类型" style="min-width: 170px">
+        <el-select v-model="selectedTypeID" clearable placeholder="请选择服务类型" aria-label="选择服务类型" style="width: 170px">
           <el-option v-for="type in projectTypes.filter((item) => !selectedEnvironmentID || item.environment_id === selectedEnvironmentID)" :key="type.id" :label="type.name" :value="type.id" />
         </el-select>
         <el-input v-model="keyword" clearable placeholder="搜索实例、服组、主机或镜像" aria-label="搜索目标实例" style="max-width: 300px" />
@@ -474,9 +433,9 @@ onUnmounted(() => {
       <div class="rollouts-grid">
         <section class="rollout-card rollout-targets">
           <header class="rollout-card-header">
-            <div><h2>发布目标</h2><p>按实际发布波次分组；已选择 {{ selectedInstances.length }} / 10000 台</p></div>
+            <div><h2>发布目标</h2><p>每个任务只能选择一种服务类型；已选择 {{ selectedInstances.length }} / 10000 台</p></div>
             <div class="target-actions">
-              <el-button size="small" plain :disabled="!filteredInstances.length || taskInProgress" @click="selectFiltered">全选筛选结果</el-button>
+              <el-button size="small" plain :disabled="!filteredInstances.length" @click="selectFiltered">全选筛选结果</el-button>
               <el-button size="small" text :disabled="!selectedIDs.length" @click="clearSelection">清除选择</el-button>
             </div>
           </header>
@@ -486,7 +445,7 @@ onUnmounted(() => {
                 <el-checkbox
                   :model-value="groupSelection(group).allSelected"
                   :indeterminate="groupSelection(group).indeterminate"
-                  :disabled="!canManage || taskInProgress"
+                  :disabled="!canManage"
                   @change="toggleGroup(group, Boolean($event))"
                 >{{ group.name }}</el-checkbox>
                 <span class="target-group-count">{{ groupSelection(group).selectedCount }}/{{ group.instances.length }} 已选</span>
@@ -495,7 +454,7 @@ onUnmounted(() => {
                 <input
                   type="checkbox"
                   :checked="selectedSet.has(item.id)"
-                  :disabled="!canManage || taskInProgress"
+                  :disabled="!canManage"
                   :aria-label="`选择实例 ${item.name}`"
                   @change="toggleInstance(item.id, $event)"
                 />
@@ -505,7 +464,7 @@ onUnmounted(() => {
                 <el-button v-if="canManage" text size="small" @click="editInstanceGroup(item)">{{ item.rollout_group || '设置服组' }}</el-button>
               </div>
             </article>
-            <el-empty v-if="!targetGroups.length" :description="selectedProjectID ? '当前筛选条件下没有服务实例' : '请选择项目'" :image-size="66" />
+            <el-empty v-if="!targetGroups.length" :description="!selectedProjectID ? '请选择项目' : !selectedTypeID ? '请先选择服务类型' : '当前筛选条件下没有服务实例'" :image-size="66" />
           </div>
         </section>
 
@@ -530,7 +489,7 @@ onUnmounted(() => {
               </div>
             </el-form>
             <div v-if="missingProbeTypes.length" class="probe-warning">以下服务类型尚未设置就绪检查：{{ missingProbeTypes.map((item) => item.name).join('、') }}</div>
-            <el-button class="create-rollout-button" type="primary" :loading="submitting" :disabled="!canManage || !selectedInstances.length || selectedInstances.length > 10000 || taskInProgress || (rolloutForm.action === 'update_image' && !rolloutForm.image.trim()) || missingProbeTypes.length > 0" @click="createRollout">
+            <el-button class="create-rollout-button" type="primary" :loading="submitting" :disabled="!canManage || !selectedInstances.length || selectedInstances.length > 10000 || (rolloutForm.action === 'update_image' && !rolloutForm.image.trim()) || missingProbeTypes.length > 0" @click="createRollout">
               创建滚动发布 · {{ selectedInstances.length }} 台
             </el-button>
           </section>
@@ -544,6 +503,13 @@ onUnmounted(() => {
             <el-empty v-if="!projectTypes.length" description="当前项目暂无服务类型" :image-size="50" />
           </section>
 
+        </aside>
+      </div>
+
+        </div>
+      </el-dialog>
+      <el-dialog v-model="detailVisible" title="任务详情" width="min(800px, 94vw)">
+        <el-alert v-if="pollError" :title="pollError" type="error" :closable="false" />
           <section v-if="rolloutDetail" class="rollout-card rollout-task-card">
             <header class="rollout-card-header">
               <div><h2>{{ rolloutDetail.job.action === 'restart' ? '滚动重启' : '滚动更新镜像' }} · {{ taskStatusLabel(rolloutDetail.job.status) }}</h2><p>{{ rolloutDetail.job.operator }} · {{ new Date(rolloutDetail.job.created_at).toLocaleString() }}</p></div>
@@ -568,18 +534,8 @@ onUnmounted(() => {
             </details>
           </section>
 
-          <section class="rollout-card rollout-history-card">
-            <header class="rollout-card-header"><div><h2>任务历史</h2><p>最多显示最近 100 个任务</p></div><el-button size="small" text :loading="historyLoading" @click="refreshHistory">刷新</el-button></header>
-            <button v-for="job in historyForProject" :key="job.id" class="history-job-row" :class="{ selected: rolloutDetail?.job.id === job.id }" @click="selectHistoryJob(job)">
-              <span><b>{{ job.action === 'restart' ? '滚动重启' : '滚动更新镜像' }}</b><small>{{ job.image || projects.find((item) => item.id === job.project_id)?.name || job.project_id }} · {{ new Date(job.created_at).toLocaleString() }}</small></span>
-              <span><el-tag size="small" :type="job.status === 'succeeded' ? 'success' : job.status === 'paused' || job.status === 'partial' ? 'warning' : job.status === 'failed' ? 'danger' : 'info'">{{ taskStatusLabel(job.status) }}</el-tag><small>{{ job.completed }}/{{ job.total }}</small></span>
-            </button>
-            <el-empty v-if="!historyLoading && !historyForProject.length" description="暂无滚动发布任务" :image-size="50" />
-          </section>
-        </aside>
-      </div>
-
-      <el-dialog v-model="probeDialogVisible" title="配置服务就绪检查" width="480px">
+      </el-dialog>
+      <el-dialog v-model="probeDialogVisible" append-to-body title="配置服务就绪检查" width="480px">
         <el-form label-width="115px">
           <el-form-item label="检查方式">
             <el-select v-model="probeForm.type" style="width: 100%">
@@ -604,12 +560,14 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.rollouts-page { width: 100%; min-width: 0; padding: 26px 30px 34px; box-sizing: border-box; }
-.rollouts-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 20px; }
-.rollouts-breadcrumb { color: var(--ops-text-secondary); font-size: 12px; }
-.rollouts-breadcrumb span { padding: 0 6px; color: #a7b2c1; }
-.rollouts-header h1 { margin: 7px 0 5px; font-size: 23px; font-weight: 650; color: var(--ops-text); }
-.rollouts-header p { margin: 0; color: var(--ops-text-secondary); font-size: 13px; line-height: 1.5; }
+.rollouts-page { width: 100%; min-width: 0; }
+.task-list { overflow: hidden; border: 1px solid var(--ops-border); border-radius: 12px; background: #fff; box-shadow: 0 2px 8px rgba(28, 47, 78, .035); }
+.task-list-header { display: flex; align-items: center; padding: 18px 20px; border-bottom: 1px solid var(--ops-border); }
+.task-list-header h2 { margin: 0; color: var(--ops-text); font-size: 15px; font-weight: 600; }
+.task-list-header p { margin: 4px 0 0; color: var(--ops-text-secondary); font-size: 12px; }
+.rollout-table { --el-table-header-bg-color: #fff; --el-table-row-hover-bg-color: #f8faff; }
+.rollout-table :deep(th.el-table__cell) { padding: 13px 0; color: var(--ops-text-secondary); font-size: 12px; font-weight: 400; }
+.rollout-table :deep(td.el-table__cell) { padding: 17px 0; }
 .rollout-filter-bar { display: flex; flex-wrap: wrap; gap: 10px; margin: 18px 0; padding: 14px; border: 1px solid var(--ops-border); border-radius: 10px; background: #fff; }
 .rollouts-grid { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(360px, .85fr); align-items: start; gap: 16px; }
 .rollout-sidebar { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
@@ -643,6 +601,9 @@ onUnmounted(() => {
 .probe-config-row > div { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
 .probe-config-row b { color: var(--ops-text); font-size: 12px; }
 .probe-config-row small { color: var(--ops-text-secondary); font-size: 10px; }
+.task-list :deep(.el-table__row) { cursor: pointer; }
+.create-dialog-content { max-height: 75vh; overflow: auto; }
+.create-dialog-content .rollout-filter-bar { margin-top: 0; }
 .rollout-task-card { padding-bottom: 12px; }
 .rollout-task-card .rollout-card-header { align-items: flex-start; }
 .rollout-task-card .rollout-card-header p { max-width: 220px; }
@@ -664,23 +625,13 @@ onUnmounted(() => {
 .task-audit summary { cursor: pointer; color: var(--ops-primary); font-weight: 600; }
 .task-audit > div { display: grid; grid-template-columns: 115px 78px minmax(0, 1fr); gap: 6px; padding-top: 7px; color: var(--ops-text-secondary); }
 .task-audit time { font-variant-numeric: tabular-nums; }
-.rollout-history-card { padding-bottom: 4px; }
-.history-job-row { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 15px; border: 0; border-bottom: 1px solid #f0f2f5; background: #fff; color: var(--ops-text); text-align: left; cursor: pointer; }
-.history-job-row:hover, .history-job-row.selected { background: #f5f8ff; }
-.history-job-row > span { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
-.history-job-row > span:last-child { align-items: flex-end; flex-shrink: 0; }
-.history-job-row b { font-size: 11px; }
-.history-job-row small { max-width: 240px; overflow: hidden; color: var(--ops-text-secondary); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .probe-dialog-hint { margin: 0; color: var(--ops-text-secondary); font-size: 11px; }
 @media (max-width: 1050px) { .rollouts-grid { grid-template-columns: 1fr; } .target-group-list { max-height: 55vh; } }
 @media (max-width: 700px) {
-  .rollouts-page { padding: 18px 12px 28px; }
-  .rollouts-header { flex-direction: column; }
   .rollout-filter-bar > * { width: 100%; max-width: none !important; }
   .target-instance-row { grid-template-columns: 18px minmax(100px, 1fr) auto; }
   .target-instance-row code { display: none; }
   .target-instance-row > .el-button { grid-column: 2 / -1; justify-self: start; }
   .target-actions { flex-wrap: wrap; justify-content: flex-end; }
-  .task-audit > div { grid-template-columns: 1fr; gap: 2px; }
 }
 </style>
