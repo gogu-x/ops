@@ -164,6 +164,7 @@ type ContainerDetail struct {
 	Image         string            `json:"image"`
 	Status        string            `json:"status"`
 	State         string            `json:"state"`
+	HealthStatus  string            `json:"health_status,omitempty"`
 	Running       bool              `json:"running"`
 	RestartCount  int               `json:"restart_count"`
 	StartedAt     string            `json:"started_at"`

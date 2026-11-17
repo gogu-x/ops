@@ -22,6 +22,10 @@ type serviceOperationManager struct {
 	operations map[string]*trackedServiceOperation
 	busyIDs    map[string]string
 	app        *application.Service
+	locks      interface {
+		AcquireInstanceLocks(context.Context, string, []string) error
+		ReleaseInstanceLocks(context.Context, string) error
+	}
 }
 
 var (
@@ -29,8 +33,15 @@ var (
 	errInstanceOperationBusy = errors.New("所选实例正在执行其他任务")
 )
 
-func newServiceOperationManager(app *application.Service) *serviceOperationManager {
-	return &serviceOperationManager{operations: make(map[string]*trackedServiceOperation), busyIDs: make(map[string]string), app: app}
+func newServiceOperationManager(app *application.Service, lockStores ...interface {
+	AcquireInstanceLocks(context.Context, string, []string) error
+	ReleaseInstanceLocks(context.Context, string) error
+}) *serviceOperationManager {
+	manager := &serviceOperationManager{operations: make(map[string]*trackedServiceOperation), busyIDs: make(map[string]string), app: app}
+	if len(lockStores) > 0 {
+		manager.locks = lockStores[0]
+	}
+	return manager
 }
 
 func (m *serviceOperationManager) start(ownerID, operator string, request model.ServiceInstanceBatchOperationRequest, instances []model.ServiceInstance) (model.ServiceInstanceOperation, error) {
@@ -66,6 +77,16 @@ func (m *serviceOperationManager) start(ownerID, operator string, request model.
 			return model.ServiceInstanceOperation{}, errInstanceOperationBusy
 		}
 	}
+	if m.locks != nil {
+		ids := make([]string, 0, len(instances))
+		for _, item := range instances {
+			ids = append(ids, item.ID)
+		}
+		if err := m.locks.AcquireInstanceLocks(context.Background(), operationLockOwner(operation.ID), ids); err != nil {
+			m.mu.Unlock()
+			return model.ServiceInstanceOperation{}, errInstanceOperationBusy
+		}
+	}
 	m.operations[operation.ID] = &trackedServiceOperation{ServiceInstanceOperation: operation, ownerID: ownerID}
 	for _, item := range instances {
 		m.busyIDs[item.ID] = operation.ID
@@ -95,9 +116,9 @@ func (m *serviceOperationManager) run(id, operator string, request model.Service
 		}
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	operation := m.operations[id]
 	if operation == nil {
+		m.mu.Unlock()
 		return
 	}
 	switch {
@@ -114,7 +135,13 @@ func (m *serviceOperationManager) run(id, operator string, request model.Service
 			delete(m.busyIDs, item.InstanceID)
 		}
 	}
+	m.mu.Unlock()
+	if m.locks != nil {
+		_ = m.locks.ReleaseInstanceLocks(context.Background(), operationLockOwner(id))
+	}
 }
+
+func operationLockOwner(id string) string { return "operation:" + id }
 
 func (m *serviceOperationManager) reserve(instanceIDs []string) (func(), error) {
 	reservationID := "request:" + uuid.NewString()
@@ -125,17 +152,26 @@ func (m *serviceOperationManager) reserve(instanceIDs []string) (func(), error) 
 			return nil, errInstanceOperationBusy
 		}
 	}
+	if m.locks != nil {
+		if err := m.locks.AcquireInstanceLocks(context.Background(), reservationID, instanceIDs); err != nil {
+			m.mu.Unlock()
+			return nil, errInstanceOperationBusy
+		}
+	}
 	for _, id := range instanceIDs {
 		m.busyIDs[id] = reservationID
 	}
 	m.mu.Unlock()
 	return func() {
 		m.mu.Lock()
-		defer m.mu.Unlock()
 		for _, id := range instanceIDs {
 			if m.busyIDs[id] == reservationID {
 				delete(m.busyIDs, id)
 			}
+		}
+		m.mu.Unlock()
+		if m.locks != nil {
+			_ = m.locks.ReleaseInstanceLocks(context.Background(), reservationID)
 		}
 	}, nil
 }

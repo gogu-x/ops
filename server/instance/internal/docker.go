@@ -28,11 +28,15 @@ func containerName(item model.ServiceInstance) string {
 }
 
 func hostRequest(message interface{}) (interface{}, error) {
+	return hostRequestTimeout(message, 20*time.Second)
+}
+
+func hostRequestTimeout(message interface{}, timeout time.Duration) (interface{}, error) {
 	pid, ok := tree.Lookup("ops-host")
 	if !ok {
 		return nil, errors.New("host actor is unavailable")
 	}
-	return tree.Request(pid, message).AwaitTimeout(20 * time.Second)
+	return tree.Request(pid, message).AwaitTimeout(timeout)
 }
 
 // buildContainerSpec converts a service instance's image, structured params
@@ -252,7 +256,7 @@ func (a *InstanceService) updateImageWithMetadata(id, newImage, operator, operat
 		a.recordImageOperationEvent(id, operation, false, err.Error())
 		return model.ServiceInstance{}, err
 	}
-	if _, err := hostRequest(model.ImagePullRequest{HostID: hostID, Image: newImage}); err != nil {
+	if _, err := hostRequestTimeout(model.ImagePullRequest{HostID: hostID, Image: newImage}, 6*time.Minute); err != nil {
 		item.Status = model.StatusError
 		item.DeployError = fmt.Sprintf("pull image: %s", err.Error())
 		a.recordDeployment(id, operation, newImage, previousImage, operator, err)
@@ -296,7 +300,7 @@ func (a *InstanceService) redeploy(item model.ServiceInstance, hostID string) (m
 		}
 	}
 	spec := buildContainerSpec(item)
-	value, err := hostRequest(model.ContainerDeployRequest{HostID: hostID, Spec: spec})
+	value, err := hostRequestTimeout(model.ContainerDeployRequest{HostID: hostID, Spec: spec}, 90*time.Second)
 	if err != nil {
 		item.Status = model.StatusError
 		item.DeployError = err.Error()
@@ -458,6 +462,9 @@ func buildContainerDetail(c types.ContainerJSON) model.ContainerDetail {
 			detail.FinishedAt = c.ContainerJSONBase.State.FinishedAt
 			detail.ExitCode = c.ContainerJSONBase.State.ExitCode
 			detail.Error = c.ContainerJSONBase.State.Error
+			if c.ContainerJSONBase.State.Health != nil {
+				detail.HealthStatus = c.ContainerJSONBase.State.Health.Status
+			}
 		}
 	}
 	detail.Status = mapContainerStatus(detail.State)

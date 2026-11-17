@@ -26,6 +26,8 @@ const activeHost = ref<Host | null>(null)
 const form = reactive<HostForm>({
   project_ids: [],
   name: '',
+  region: '',
+  zone: '',
   internal_ip: '',
   external_ip: '',
   docker_host: 'tcp://',
@@ -85,7 +87,7 @@ function testStatusType(hostId: string): 'info' | 'success' | 'danger' {
 }
 
 function openCreate() {
-  Object.assign(form, { project_ids: [], name: '', internal_ip: '', external_ip: '', docker_host: 'tcp://', tls_ca: '', tls_cert: '', tls_key: '', note: '' })
+  Object.assign(form, { project_ids: [], name: '', region: '', zone: '', internal_ip: '', external_ip: '', docker_host: 'tcp://', tls_ca: '', tls_cert: '', tls_key: '', note: '' })
   dialogVisible.value = true
 }
 
@@ -96,7 +98,7 @@ function openDetails(host: Host) {
 }
 
 async function beginHostEdit(host: Host) {
-  Object.assign(form, { project_ids: [], name: host.name, internal_ip: host.internal_ip, external_ip: host.external_ip, docker_host: host.docker_host, tls_ca: '', tls_cert: '', tls_key: '', note: host.note })
+  Object.assign(form, { project_ids: [], name: host.name, region: host.region || '', zone: host.zone || '', internal_ip: host.internal_ip, external_ip: host.external_ip, docker_host: host.docker_host, tls_ca: '', tls_cert: '', tls_key: '', note: host.note })
   testedConnectionSignature.value = ''
   detailTestState.value = 'idle'
   detailEditing.value = true
@@ -148,7 +150,7 @@ async function saveHostEdit() {
   if (!connectionTestPassed.value) { ElMessage.warning('请先测试当前 Docker 地址和 TLS 证书，验证成功后再保存'); return }
   detailSaving.value = true
   try {
-    await hostApi.update(activeHost.value.id, { ...form, project_ids: undefined, name: form.name.trim(), internal_ip: form.internal_ip.trim(), external_ip: form.external_ip.trim(), docker_host: form.docker_host.trim(), tls_ca: form.tls_ca.trim(), tls_cert: form.tls_cert.trim(), tls_key: form.tls_key.trim(), note: form.note.trim() })
+    await hostApi.update(activeHost.value.id, { ...form, project_ids: undefined, name: form.name.trim(), region: form.region?.trim(), zone: form.zone?.trim(), internal_ip: form.internal_ip.trim(), external_ip: form.external_ip.trim(), docker_host: form.docker_host.trim(), tls_ca: form.tls_ca.trim(), tls_cert: form.tls_cert.trim(), tls_key: form.tls_key.trim(), note: form.note.trim() })
     ElMessage.success('主机信息已更新')
     detailEditing.value = false
     await loadHosts()
@@ -174,6 +176,8 @@ async function createHost() {
     await hostApi.create({
       project_ids: form.project_ids,
       name: form.name.trim(),
+      region: form.region?.trim(),
+      zone: form.zone?.trim(),
       internal_ip: form.internal_ip.trim(),
       external_ip: form.external_ip.trim(),
       docker_host: form.docker_host.trim(),
@@ -267,6 +271,12 @@ onMounted(loadHosts)
         <el-form-item label="名称" required>
           <el-input v-model="form.name" placeholder="例如 workstation 或 game-1" />
         </el-form-item>
+        <el-form-item label="机房 / 地域">
+          <el-input v-model="form.region" placeholder="例如 华东一区" />
+        </el-form-item>
+        <el-form-item label="可用区">
+          <el-input v-model="form.zone" placeholder="例如 zone-a" />
+        </el-form-item>
         <el-form-item label="内网 IP">
           <el-input v-model="form.internal_ip" placeholder="例如 10.0.0.12" />
         </el-form-item>
@@ -317,6 +327,8 @@ onMounted(loadHosts)
           <div class="host-detail-section-title">连接信息</div>
           <div class="host-detail-kv">
             <div><span>Docker Host</span><b class="mono-text">{{ activeHost.docker_host || '—' }}</b></div>
+            <div><span>机房 / 地域</span><b>{{ activeHost.region || '未标注' }}</b></div>
+            <div><span>可用区</span><b>{{ activeHost.zone || '未标注' }}</b></div>
             <div><span>内网 IP</span><b>{{ activeHost.internal_ip || '—' }}</b></div>
             <div><span>外网 IP</span><b>{{ activeHost.external_ip || '—' }}</b></div>
             <div><span>所属项目</span><b>{{ hostProjectNames(activeHost) }}</b></div>
@@ -337,6 +349,8 @@ onMounted(loadHosts)
         <el-form v-else v-loading="detailConfigLoading" class="host-detail-scroll host-inline-form" label-position="top">
           <div class="host-detail-section-title">主机信息</div>
           <el-form-item label="主机名称" required><el-input v-model="form.name" /></el-form-item>
+          <el-form-item label="机房 / 地域"><el-input v-model="form.region" placeholder="例如 华东一区" /></el-form-item>
+          <el-form-item label="可用区"><el-input v-model="form.zone" placeholder="例如 zone-a" /></el-form-item>
           <el-form-item label="Docker Host" required><el-input v-model="form.docker_host" placeholder="tcp://host:2376" /></el-form-item>
           <el-form-item label="内网 IP"><el-input v-model="form.internal_ip" placeholder="可选" /></el-form-item>
           <el-form-item label="外网 IP"><el-input v-model="form.external_ip" placeholder="可选" /></el-form-item>

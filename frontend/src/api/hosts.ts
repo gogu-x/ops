@@ -5,6 +5,8 @@ export interface Host {
   project_id: string
   project_ids?: string[]
   name: string
+  region?: string
+  zone?: string
   internal_ip: string
   external_ip: string
   docker_host: string
@@ -19,6 +21,8 @@ export interface Host {
 export interface HostForm {
   project_ids?: string[]
   name: string
+  region?: string
+  zone?: string
   internal_ip: string
   external_ip: string
   docker_host: string

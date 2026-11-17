@@ -1,21 +1,28 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Box, FolderOpened, Grid, Monitor, SwitchButton, User } from '@element-plus/icons-vue'
+import { Box, FolderOpened, Grid, Monitor, RefreshRight, SwitchButton, User } from '@element-plus/icons-vue'
 import { useAuthStore } from '../stores/auth'
 
 withDefaults(defineProps<{ fixedViewport?: boolean }>(), { fixedViewport: false })
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
-const navigation = computed(() => [
-  { path: '/', label: '控制台', icon: Grid, visible: auth.hasPermission('dashboard.view') },
-  { path: '/services', label: '服务', icon: Box, visible: auth.hasPermission('services.view') },
-  { path: '/projects', label: '项目', icon: FolderOpened, visible: auth.hasPermission('projects.view') },
-  { path: '/hosts', label: '主机', icon: Monitor, visible: auth.hasPermission('hosts.view') },
-  { path: '/permissions', label: '权限', icon: User, visible: auth.user?.role === 'admin' },
-].filter((item) => item.visible))
+interface NavigationChild { path: string; label: string; icon: Component; visible: boolean }
+interface NavigationItem { path: string; label: string; icon: Component; visible: boolean; children: NavigationChild[] }
+const navigation = computed(() => {
+  const items: NavigationItem[] = [
+    { path: '/', label: '控制台', icon: Grid, visible: auth.hasPermission('dashboard.view'), children: [] },
+    { path: '/services', label: '服务', icon: Box, visible: auth.hasPermission('services.view'), children: [
+      { path: '/services/rollouts', label: '滚动发布', icon: RefreshRight, visible: auth.hasPermission('services.view') },
+    ] },
+    { path: '/projects', label: '项目', icon: FolderOpened, visible: auth.hasPermission('projects.view'), children: [] },
+    { path: '/hosts', label: '主机', icon: Monitor, visible: auth.hasPermission('hosts.view'), children: [] },
+    { path: '/permissions', label: '权限', icon: User, visible: auth.user?.role === 'admin', children: [] },
+  ]
+  return items.filter((item) => item.visible).map((item) => ({ ...item, children: item.children.filter((child) => child.visible) }))
+})
 async function logout() {
   try { await ElMessageBox.confirm('确定要退出登录吗？', '退出登录', { type: 'warning' }) } catch { return }
   try { await auth.logout() } catch { ElMessage.warning('会话已在本机清除') }
@@ -28,7 +35,10 @@ async function logout() {
     <header class="app-header">
       <RouterLink to="/" class="app-brand" aria-label="OPS 控制台"><span class="brand-symbol"><el-icon><Grid /></el-icon></span><span>OPS</span></RouterLink>
       <nav class="app-navigation" aria-label="主导航">
-        <RouterLink v-for="item in navigation" :key="item.path" :to="item.path" :class="{ active: route.path === item.path }" :aria-current="route.path === item.path ? 'page' : undefined" :title="item.label"><el-icon><component :is="item.icon" /></el-icon><span>{{ item.label }}</span></RouterLink>
+        <div v-for="item in navigation" :key="item.path" class="navigation-group">
+          <RouterLink :to="item.path" :class="{ active: route.path === item.path || route.path.startsWith(`${item.path}/`) }" :aria-current="route.path === item.path ? 'page' : undefined" :title="item.label"><el-icon><component :is="item.icon" /></el-icon><span>{{ item.label }}</span></RouterLink>
+          <RouterLink v-for="child in (route.path === item.path || route.path.startsWith(`${item.path}/`) ? item.children : [])" :key="child.path" :to="child.path" class="navigation-subitem" :class="{ active: route.path === child.path }" :aria-current="route.path === child.path ? 'page' : undefined" :title="child.label"><el-icon><component :is="child.icon" /></el-icon><span>{{ child.label }}</span></RouterLink>
+        </div>
       </nav>
       <el-dropdown trigger="click" class="account-menu">
         <button class="account-button" aria-label="账户菜单"><span class="account-avatar">{{ (auth.user?.username || '?').slice(0, 1).toUpperCase() }}</span><span class="account-name">{{ auth.user?.username }}</span></button>
@@ -48,7 +58,10 @@ async function logout() {
 .app-brand { display: inline-flex; align-items: center; gap: 10px; color: #fff; font-size: 21px; font-weight: 650; letter-spacing: 1px; text-decoration: none; }
 .brand-symbol { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; background: var(--ops-primary); color: #fff; font-size: 18px; }
 .app-navigation { display: flex; flex-direction: column; gap: 5px; }
+.navigation-group { display: flex; flex-direction: column; gap: 3px; }
 .app-navigation a { display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: 7px; text-decoration: none; color: rgba(255, 255, 255, .68); font-size: 14px; }
+.app-navigation a.navigation-subitem { min-height: 36px; padding-left: 29px; font-size: 13px; }
+.app-navigation a.navigation-subitem .el-icon { font-size: 15px; }
 .app-navigation a:hover { background: rgba(255, 255, 255, .08); color: #fff; }
 .app-navigation a.active { background: var(--ops-primary); color: #fff; font-weight: 600; }
 .app-navigation .el-icon { font-size: 17px; }
@@ -65,6 +78,7 @@ async function logout() {
   .app-brand > span:last-child, .app-navigation a > span, .account-name { display: none; }
   .app-brand { justify-content: center; }
   .app-navigation { width: 100%; align-items: center; }
+  .navigation-group { width: 100%; align-items: center; }
   .app-navigation a { justify-content: center; width: 44px; padding: 0; }
   .account-button { padding: 0; }
   .is-workspace .app-header { flex-basis: 64px; }
@@ -77,6 +91,7 @@ async function logout() {
   .account-button { color: var(--ops-text); }
   .account-avatar { background: var(--ops-primary-light); color: var(--ops-primary); }
   .app-navigation { position: fixed; right: 0; bottom: 0; left: 0; z-index: 100; display: flex; height: calc(64px + env(safe-area-inset-bottom)); flex-direction: row; align-items: stretch; justify-content: space-around; gap: 0; padding: 4px 8px env(safe-area-inset-bottom); box-sizing: border-box; background: var(--ops-sider-bg); border-top: 1px solid rgba(255, 255, 255, .12); }
+  .app-navigation .navigation-group { display: contents; }
   .app-navigation a { flex: 1; flex-direction: column; justify-content: center; gap: 3px; min-height: 0; padding: 4px 2px; border: 0; border-radius: 6px; color: rgba(255, 255, 255, .68); font-size: 10px; }
   .app-navigation a:hover { background: rgba(255, 255, 255, .08); color: #fff; }
   .app-navigation a.active { background: var(--ops-primary); color: #fff; }

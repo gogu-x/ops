@@ -16,11 +16,15 @@ func NewTreeGateway(timeout time.Duration) *TreeGateway {
 }
 
 func (g *TreeGateway) Request(actor string, message interface{}) (interface{}, error) {
+	return g.RequestTimeout(actor, message, g.timeout)
+}
+
+func (g *TreeGateway) RequestTimeout(actor string, message interface{}, timeout time.Duration) (interface{}, error) {
 	pid, ok := tree.Lookup(actor)
 	if !ok {
 		return nil, errors.New(unavailableMessage(actor))
 	}
-	return tree.Request(pid, message).AwaitTimeout(g.timeout)
+	return tree.Request(pid, message).AwaitTimeout(timeout)
 }
 
 func unavailableMessage(actor string) string {

@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -321,6 +324,7 @@ func (s *Service) CreateServiceType(ctx context.Context, item model.ServiceType)
 		return model.ServiceType{}, err
 	}
 	created := service.NewServiceType(item.ProjectID, item.EnvironmentID, item.Name)
+	created.ReadinessProbe = normalizeReadinessProbe(item.ReadinessProbe)
 	if err := s.serviceTypes.Create(ctx, created); err != nil {
 		return model.ServiceType{}, err
 	}
@@ -350,6 +354,7 @@ func (s *Service) UpdateServiceType(ctx context.Context, item model.ServiceType)
 		}
 	}
 	item.CreatedAt = existing.CreatedAt
+	item.ReadinessProbe = normalizeReadinessProbe(item.ReadinessProbe)
 	item.UpdatedAt = time.Now().UTC()
 	if err := s.serviceTypes.Update(ctx, item); err != nil {
 		return model.ServiceType{}, err
@@ -401,6 +406,25 @@ func (s *Service) ListInstances(ctx context.Context) ([]model.ServiceInstance, e
 	return result.ServiceInstances, nil
 }
 
+// ListInstancesStrict returns only live-enriched instance states. Rollout
+// planning uses this to avoid treating an unavailable status actor as a safe
+// snapshot for availability limits.
+func (s *Service) ListInstancesStrict(ctx context.Context) ([]model.ServiceInstance, error) {
+	items, err := s.instances.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	value, err := s.gatewayRequestTimeout("ops-instance", model.EnrichRequest{ServiceInstances: items}, 2*time.Minute)
+	if err != nil {
+		return nil, err
+	}
+	result, ok := value.(model.ListResponse)
+	if !ok {
+		return nil, errors.New("invalid service instance actor response")
+	}
+	return result.ServiceInstances, nil
+}
+
 func (s *Service) CreateInstance(ctx context.Context, item model.ServiceInstance) (model.ServiceInstance, error) {
 	if err := model.ValidateServiceInstance(item); err != nil {
 		return model.ServiceInstance{}, err
@@ -413,6 +437,7 @@ func (s *Service) CreateInstance(ctx context.Context, item model.ServiceInstance
 		return model.ServiceInstance{}, err
 	}
 	created := model.NewServiceInstance(item.ServiceTypeID, item.HostID, item.Name, item.Image, item.Note, item.EnvText, item.Network, item.PortMapping, item.Params)
+	created.RolloutGroup = strings.TrimSpace(item.RolloutGroup)
 	created.RestartPolicy = model.NormalizeRestartPolicy(item.RestartPolicy)
 	if err := s.instances.Create(ctx, created); err != nil {
 		return model.ServiceInstance{}, err
@@ -436,6 +461,7 @@ func (s *Service) UpdateInstance(ctx context.Context, item model.ServiceInstance
 		return model.ServiceInstance{}, err
 	}
 	item.CreatedAt = existing.CreatedAt
+	item.RolloutGroup = strings.TrimSpace(item.RolloutGroup)
 	item.UpdatedAt = time.Now().UTC()
 	item.RestartPolicy = model.NormalizeRestartPolicy(item.RestartPolicy)
 	if err := s.instances.Update(ctx, item); err != nil {
@@ -501,14 +527,44 @@ func (s *Service) DeployInstance(ctx context.Context, id string, operator ...str
 	if err := s.ensureStoredInstanceHost(ctx, id); err != nil {
 		return model.ServiceInstance{}, err
 	}
-	return s.instanceResult(model.DeployRequest{ID: id, Operator: firstOperator(operator)})
+	return s.instanceResultTimeout(model.DeployRequest{ID: id, Operator: firstOperator(operator)}, 3*time.Minute)
 }
 
 func (s *Service) UpdateInstanceImage(ctx context.Context, id, image string, operator ...string) (model.ServiceInstance, error) {
 	if err := s.ensureStoredInstanceHost(ctx, id); err != nil {
 		return model.ServiceInstance{}, err
 	}
-	return s.instanceResult(model.UpdateImageRequest{ID: id, Image: image, Operator: firstOperator(operator)})
+	return s.instanceResultTimeout(model.UpdateImageRequest{ID: id, Image: image, Operator: firstOperator(operator)}, 9*time.Minute)
+}
+
+func normalizeReadinessProbe(probe model.ReadinessProbe) model.ReadinessProbe {
+	probe.Type = strings.TrimSpace(probe.Type)
+	probe.Path = strings.TrimSpace(probe.Path)
+	if probe.Type == "http" && probe.Path == "" {
+		probe.Path = "/health"
+	}
+	return probe
+}
+
+func (s *Service) instanceResultTimeout(message interface{}, timeout time.Duration) (model.ServiceInstance, error) {
+	value, err := s.gatewayRequestTimeout("ops-instance", message, timeout)
+	if err != nil {
+		return model.ServiceInstance{}, err
+	}
+	result, ok := value.(model.ServiceInstance)
+	if !ok {
+		return model.ServiceInstance{}, errors.New("invalid service instance actor response")
+	}
+	return result, nil
+}
+
+func (s *Service) gatewayRequestTimeout(actor string, message interface{}, timeout time.Duration) (interface{}, error) {
+	if gateway, ok := s.gateway.(interface {
+		RequestTimeout(string, interface{}, time.Duration) (interface{}, error)
+	}); ok {
+		return gateway.RequestTimeout(actor, message, timeout)
+	}
+	return s.gateway.Request(actor, message)
 }
 
 func firstOperator(operator []string) string {
@@ -542,7 +598,11 @@ func (s *Service) InstanceStatus(id string) (model.ServiceInstance, error) {
 }
 
 func (s *Service) ContainerAction(id, action string) error {
-	_, err := s.gateway.Request("ops-instance", model.InstanceContainerActionRequest{ID: id, Action: action})
+	timeout := 20 * time.Second
+	if action == "restart" {
+		timeout = 3 * time.Minute
+	}
+	_, err := s.gatewayRequestTimeout("ops-instance", model.InstanceContainerActionRequest{ID: id, Action: action}, timeout)
 	return err
 }
 
@@ -561,6 +621,94 @@ func (s *Service) InstanceDetail(id string) (model.ContainerDetail, error) {
 		return model.ContainerDetail{}, errors.New("invalid service instance actor response")
 	}
 	return result.Detail, nil
+}
+
+// InstanceReadiness checks the configured service-type probe for one instance.
+func (s *Service) InstanceReadiness(ctx context.Context, id string, configuredProbe model.ReadinessProbe) (bool, string, error) {
+	item, err := s.instances.Get(ctx, id)
+	if err != nil {
+		return false, "实例不存在", err
+	}
+	probe := normalizeReadinessProbe(configuredProbe)
+	if probe.Type == "" {
+		return false, "服务类型未配置就绪检查", nil
+	}
+	detail, err := s.InstanceDetail(id)
+	if err != nil {
+		return false, err.Error(), nil
+	}
+	if !detail.Running {
+		return false, "容器未运行", nil
+	}
+	switch probe.Type {
+	case "docker":
+		switch detail.HealthStatus {
+		case "healthy":
+			return true, "Docker HEALTHCHECK healthy", nil
+		case "starting":
+			return false, "Docker HEALTHCHECK starting", nil
+		case "unhealthy":
+			return false, "Docker HEALTHCHECK unhealthy", nil
+		default:
+			return false, "镜像未提供 Docker HEALTHCHECK", nil
+		}
+	case "tcp", "http":
+		hosts, err := s.ListHosts()
+		if err != nil {
+			return false, err.Error(), nil
+		}
+		var host *model.Host
+		for i := range hosts {
+			if hosts[i].ID == item.HostID {
+				host = &hosts[i]
+				break
+			}
+		}
+		if host == nil {
+			return false, "部署主机不存在", nil
+		}
+		address := strings.TrimSpace(host.InternalIP)
+		if address == "" {
+			address = strings.TrimSpace(host.ExternalIP)
+		}
+		address = strings.Trim(address, "[]")
+		if address == "" {
+			return false, "主机未配置内网或外网 IP", nil
+		}
+		if net.ParseIP(address) == nil {
+			return false, "健康检查地址不是有效 IP", nil
+		}
+		endpoint := net.JoinHostPort(address, strconv.Itoa(probe.Port))
+		probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		if probe.Type == "tcp" {
+			connection, err := (&net.Dialer{}).DialContext(probeCtx, "tcp", endpoint)
+			if err != nil {
+				return false, err.Error(), nil
+			}
+			_ = connection.Close()
+			return true, "TCP probe passed", nil
+		}
+		path := probe.Path
+		if path == "" {
+			path = "/health"
+		}
+		request, err := http.NewRequestWithContext(probeCtx, http.MethodGet, "http://"+endpoint+path, nil)
+		if err != nil {
+			return false, err.Error(), nil
+		}
+		response, err := (&http.Client{Timeout: 3 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}).Do(request)
+		if err != nil {
+			return false, err.Error(), nil
+		}
+		defer response.Body.Close()
+		if response.StatusCode < 200 || response.StatusCode >= 300 {
+			return false, fmt.Sprintf("HTTP probe returned %d", response.StatusCode), nil
+		}
+		return true, "HTTP probe passed", nil
+	default:
+		return false, "不支持的就绪检查类型", nil
+	}
 }
 
 func (s *Service) InstanceResourceHistory(id string, limit int) (model.InstanceResourceHistoryResponse, error) {

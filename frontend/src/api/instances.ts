@@ -9,6 +9,7 @@ export interface ServiceInstance {
   service_type_id: string
   host_id: string
   name: string
+  rollout_group?: string
   image: string
   params: ServiceParam[]
   env_text: string
@@ -40,6 +41,7 @@ export interface ContainerDetail {
   status: InstanceStatus
   state: string
   running: boolean
+  health_status?: string
   restart_count: number
   started_at: string
   finished_at: string
@@ -155,7 +157,7 @@ export const instanceApi = {
   },
 
   async deploy(id: string): Promise<ServiceInstance> {
-    const response = await api.post<ApiResponse<ServiceInstance>>(`/service-instances/${encodeURIComponent(id)}/deploy`, undefined, { timeout: 90000 })
+    const response = await api.post<ApiResponse<ServiceInstance>>(`/service-instances/${encodeURIComponent(id)}/deploy`, undefined, { timeout: 180000 })
     return response.data.data
   },
 
@@ -163,7 +165,7 @@ export const instanceApi = {
     const response = await api.post<ApiResponse<ServiceInstance>>(
       `/service-instances/${encodeURIComponent(id)}/update-image`,
       { image },
-      { timeout: 120000 },
+      { timeout: 600000 },
     )
     return response.data.data
   },
@@ -180,7 +182,7 @@ export const instanceApi = {
     // Restart now redeploys the container (removes + recreates) so edited
     // config (image, env vars, params) takes effect, so it can take longer
     // than a plain `docker restart`.
-    await api.post(`/service-instances/${encodeURIComponent(id)}/restart`, undefined, { timeout: 90000 })
+    await api.post(`/service-instances/${encodeURIComponent(id)}/restart`, undefined, { timeout: 180000 })
   },
 
   async removeContainer(id: string): Promise<void> {

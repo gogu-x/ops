@@ -10,6 +10,7 @@ export interface ServiceType {
   project_id: string
   environment_id: string
   name: string
+  readiness_probe: { type: '' | 'docker' | 'tcp' | 'http'; port: number; path: string }
   created_at?: string
   updated_at?: string
 }

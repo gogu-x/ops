@@ -46,6 +46,8 @@ func (a *DockerService) create(host model.Host) (model.Host, error) {
 	}
 	created := NewHost(host.Name, host.DockerHost, host.TLSCA, host.TLSCert, host.TLSKey, host.Note)
 	host.ID = created.ID
+	host.Region = strings.TrimSpace(host.Region)
+	host.Zone = strings.TrimSpace(host.Zone)
 	host.ProjectID = ""
 	host.ProjectIDs = nil
 	host.CreatedAt = created.CreatedAt
@@ -64,6 +66,8 @@ func (a *DockerService) update(host model.Host) (model.Host, error) {
 	if err := validateHostConfiguration(host); err != nil {
 		return model.Host{}, err
 	}
+	host.Region = strings.TrimSpace(host.Region)
+	host.Zone = strings.TrimSpace(host.Zone)
 	host.ProjectID = existing.ProjectID
 	host.ProjectIDs = existing.ProjectIDs
 	host.CreatedAt = existing.CreatedAt
@@ -174,7 +178,7 @@ func (a *DockerService) containerDeploy(hostID string, spec model.ContainerSpec)
 	if err != nil {
 		return model.ContainerDeployResponse{}, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	containerID, err := a.docker.ContainerCreate(ctx, h, spec)
 	if err != nil {

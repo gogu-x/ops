@@ -3,6 +3,7 @@ import Login from '../views/Login.vue'
 import Home from '../views/Home.vue'
 import Hosts from '../views/Hosts.vue'
 import Services from '../views/Services.vue'
+import Rollouts from '../views/Rollouts.vue'
 import Projects from '../views/Projects.vue'
 import Permissions from '../views/Permissions.vue'
 
@@ -23,6 +24,7 @@ const router = createRouter({
     { path: '/', component: Home },
     { path: '/hosts', component: Hosts },
     { path: '/services', component: Services },
+    { path: '/services/rollouts', component: Rollouts },
     { path: '/projects', component: Projects },
     { path: '/permissions', component: Permissions },
   ],
@@ -37,9 +39,9 @@ router.beforeEach((to) => {
   if (to.path === '/permissions') {
     if (user.role !== 'admin') return defaultPathForUser(user)
   }
-  if (to.path === '/services' || to.path === '/projects' || to.path === '/hosts') {
+  if (to.path.startsWith('/services') || to.path === '/projects' || to.path === '/hosts') {
     const permissions = user.role === 'admin' ? ['services.view', 'projects.view', 'hosts.view'] : (user.permissions || [])
-    const required = to.path === '/services' ? 'services.view' : to.path === '/projects' ? 'projects.view' : 'hosts.view'
+    const required = to.path.startsWith('/services') ? 'services.view' : to.path === '/projects' ? 'projects.view' : 'hosts.view'
     const allowed = permissions.includes(required) || (required === 'services.view' && permissions.includes('services.manage')) || (required === 'hosts.view' && permissions.includes('hosts.manage'))
     if (!allowed) return defaultPathForUser(user)
   }

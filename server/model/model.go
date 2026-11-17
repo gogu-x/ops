@@ -100,6 +100,8 @@ type Host struct {
 	ProjectID  string    `json:"project_id" bson:"project_id"`
 	ProjectIDs []string  `json:"project_ids,omitempty" bson:"project_ids,omitempty"`
 	Name       string    `json:"name" bson:"name"`
+	Region     string    `json:"region,omitempty" bson:"region,omitempty"`
+	Zone       string    `json:"zone,omitempty" bson:"zone,omitempty"`
 	InternalIP string    `json:"internal_ip" bson:"internal_ip"`
 	ExternalIP string    `json:"external_ip" bson:"external_ip"`
 	DockerHost string    `json:"docker_host" bson:"docker_host"`
@@ -180,12 +182,13 @@ type ServiceParam struct {
 // params, env vars and notes are configured per deployable ServiceInstance,
 // not on the type itself.
 type ServiceType struct {
-	ID            string    `json:"id" bson:"_id"`
-	ProjectID     string    `json:"project_id" bson:"project_id"`
-	EnvironmentID string    `json:"environment_id" bson:"environment_id"`
-	Name          string    `json:"name" bson:"name"`
-	CreatedAt     time.Time `json:"created_at" bson:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at" bson:"updated_at"`
+	ID             string         `json:"id" bson:"_id"`
+	ProjectID      string         `json:"project_id" bson:"project_id"`
+	EnvironmentID  string         `json:"environment_id" bson:"environment_id"`
+	Name           string         `json:"name" bson:"name"`
+	ReadinessProbe ReadinessProbe `json:"readiness_probe" bson:"readiness_probe"`
+	CreatedAt      time.Time      `json:"created_at" bson:"created_at"`
+	UpdatedAt      time.Time      `json:"updated_at" bson:"updated_at"`
 }
 
 // ServiceInstance is a concrete deployable server derived from a ServiceType
@@ -203,6 +206,7 @@ type ServiceInstance struct {
 	ServiceTypeID string         `json:"service_type_id" bson:"service_type_id"`
 	HostID        string         `json:"host_id" bson:"host_id"` // Docker host to deploy this instance's container on, chosen at deploy time
 	Name          string         `json:"name" bson:"name"`
+	RolloutGroup  string         `json:"rollout_group,omitempty" bson:"rollout_group,omitempty"`
 	Image         string         `json:"image" bson:"image"`
 	Params        []ServiceParam `json:"params" bson:"params"`
 	EnvText       string         `json:"env_text" bson:"env_text"`

@@ -23,10 +23,12 @@ import (
 // AdminService owns the HTTP server lifecycle. Request handling is split by resource
 // into handler_*.go files so this type remains an infrastructure boundary.
 type AdminService struct {
-	auth       *auth.Service
-	http       *http.Server
-	app        *application.Service
-	operations *serviceOperationManager
+	auth        *auth.Service
+	http        *http.Server
+	app         *application.Service
+	operations  *serviceOperationManager
+	rolloutRepo rolloutRepository
+	rollouts    *rolloutManager
 }
 
 // NewAdminService wires the admin actor's dependencies: a Mongo-backed auth
@@ -43,10 +45,18 @@ func NewAdminService(mongodbData *mongo.Database) *AdminService {
 		service.NewMongoRepository(mongodbData),
 		instance.NewMongoRepository(mongodbData),
 	)
+	var rolloutRepo rolloutRepository
+	if mongodbData == nil {
+		rolloutRepo = newMemoryRolloutRepository()
+	} else {
+		rolloutRepo = newMongoRolloutRepository(mongodbData)
+	}
 	return &AdminService{
-		auth:       auth.NewService(authRepo),
-		app:        app,
-		operations: newServiceOperationManager(app),
+		auth:        auth.NewService(authRepo),
+		app:         app,
+		rolloutRepo: rolloutRepo,
+		rollouts:    newRolloutManager(rolloutRepo, app),
+		operations:  newServiceOperationManager(app, rolloutRepo),
 	}
 }
 
@@ -56,6 +66,9 @@ func (a *AdminService) OnInit(_ tree.Context) {
 
 	if err := a.auth.Bootstrap(context.Background()); err != nil {
 		panic("bootstrap admin: " + err.Error())
+	}
+	if err := a.rollouts.Start(); err != nil {
+		panic("initialize rollout manager: " + err.Error())
 	}
 	gin.SetMode(gin.ReleaseMode)
 	router := a.newRouter()
@@ -71,6 +84,9 @@ func (a *AdminService) OnInit(_ tree.Context) {
 func (a *AdminService) HandleMessage(_ tree.Context, _ interface{}) {}
 
 func (a *AdminService) OnStop(_ tree.Context) {
+	if a.rollouts != nil {
+		a.rollouts.Stop()
+	}
 	if a.http != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		_ = a.http.Shutdown(ctx)

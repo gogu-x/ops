@@ -225,7 +225,7 @@ async function removeEnvironment(env: Environment) {
 // -------- 服务类型表单 --------
 const typeDialogVisible = ref(false)
 const editingTypeId = ref('')
-const typeForm = reactive<ServiceTypeForm>({ project_id: '', environment_id: '', name: '' })
+const typeForm = reactive<ServiceTypeForm>({ project_id: '', environment_id: '', name: '', readiness_probe: { type: '', port: 0, path: '/health' } })
 
 function openCreateType() {
   editingTypeId.value = ''
@@ -233,13 +233,14 @@ function openCreateType() {
     project_id: activeProjectId.value || projects.value[0]?.id || '',
     environment_id: activeEnvironmentId.value || environmentsInProject(activeProjectId.value)[0]?.id || '',
     name: '',
+    readiness_probe: { type: '', port: 0, path: '/health' },
   })
   typeDialogVisible.value = true
 }
 
 function openEditType(type: ServiceType) {
   editingTypeId.value = type.id
-  Object.assign(typeForm, { project_id: type.project_id, environment_id: type.environment_id, name: type.name })
+  Object.assign(typeForm, { project_id: type.project_id, environment_id: type.environment_id, name: type.name, readiness_probe: type.readiness_probe || { type: '', port: 0, path: '/health' } })
   typeDialogVisible.value = true
 }
 
@@ -293,7 +294,7 @@ async function removeType(type: ServiceType) {
 // -------- 实例表单 --------
 const instanceDialogVisible = ref(false)
 const editingInstanceId = ref('')
-const instanceForm = reactive<ServiceInstanceForm>({ service_type_id: '', host_id: '', name: '', image: '', params: [], env_text: '', network: '', port_mapping: '', restart_policy: 'unless-stopped', note: '' })
+const instanceForm = reactive<ServiceInstanceForm>({ service_type_id: '', host_id: '', name: '', rollout_group: '', image: '', params: [], env_text: '', network: '', port_mapping: '', restart_policy: 'unless-stopped', note: '' })
 const instanceSubmitting = ref(false)
 const restartPolicyLabels: Record<RestartPolicy, string> = {
   no: '不自动重启',
@@ -324,6 +325,7 @@ function openCreateInstance() {
     service_type_id: targetType.id,
     host_id: hosts.value.find((host) => hostBelongsToProject(host, targetType.project_id))?.id || '',
     name: '',
+    rollout_group: '',
     image: '',
     params: [],
     env_text: activeProject.value?.env_vars || '',
@@ -341,6 +343,7 @@ function openEditInstance(item: ServiceInstance) {
     service_type_id: item.service_type_id,
     host_id: item.host_id,
     name: item.name,
+    rollout_group: item.rollout_group || '',
     image: item.image,
     params: item.params.map((p) => ({ ...p })),
     env_text: item.env_text || '',
@@ -1528,7 +1531,7 @@ onUnmounted(() => {
                 <el-button circle text :icon="Close" aria-label="关闭批量操作" @click="batchOperationDrawerVisible = false" />
               </header>
 
-              <div class="batch-operation-hint">先选择操作；更新镜像时填写目标镜像，再按服务类型勾选容器。单次最多选择 100 个容器。</div>
+              <div class="batch-operation-hint">按服务类型勾选容器；一次最多选择 100 个实例，任务逐项执行。</div>
               <div class="batch-operation-controls">
                 <el-select v-model="batchOperationAction" aria-label="选择批量操作" placeholder="选择操作">
                   <el-option v-for="option in batchOperationOptions" :key="option.value" :label="option.label" :value="option.value" />
@@ -1578,7 +1581,7 @@ onUnmounted(() => {
                   <el-button
                     :type="batchOperationAction === 'stop' ? 'danger' : 'primary'"
                     :loading="batchOperationSubmitting"
-                    :disabled="!batchOperationSelectedInstances.length || operationTask?.status === 'running' || (batchOperationAction === 'update_image' && !batchOperationImage.trim())"
+                    :disabled="!batchOperationSelectedInstances.length || batchOperationSelectedInstances.length > 100 || operationTask?.status === 'running' || (batchOperationAction === 'update_image' && !batchOperationImage.trim())"
                     @click="runBatchOperation"
                   >{{ batchOperationLabels[batchOperationAction] }} {{ batchOperationSelectedInstances.length }} 个实例</el-button>
                 </div>
