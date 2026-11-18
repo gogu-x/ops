@@ -8,12 +8,14 @@ import {
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '../stores/auth'
 import { environmentApi, type Environment, type EnvironmentForm } from '../api/environments'
-import { serviceApi, type ServiceType, type ServiceTypeForm } from '../api/services'
+import { serviceApi, type ServiceParam, type ServiceParameterField, type ServiceType } from '../api/services'
 import { hostApi, type Host } from '../api/hosts'
 import { projectApi, type Project } from '../api/projects'
 import { instanceApi, type BatchAction, type InstanceDeployment, type ServiceInstanceOperation, type ServiceInstance, type ServiceInstanceForm, type ContainerDetail, type ContainerResourceHistory, type RestartPolicy } from '../api/instances'
 import { eventApi, type InstanceEvent } from '../api/events'
 import AppLayout from '../components/AppLayout.vue'
+import ServiceParameterInputs from '../components/ServiceParameterInputs.vue'
+import { parameterOverrides } from '../utils/parameterOverrides'
 
 const auth = useAuthStore()
 const route = useRoute()
@@ -39,6 +41,13 @@ const keyword = ref('')
 const batchOperationDrawerVisible = ref(false)
 const batchOperationSelectedIDs = ref<string[]>([])
 const batchOperationSubmitting = ref(false)
+const batchParameterValues = ref<Record<string, Record<string, string>>>({})
+
+function setBatchParameterValue(typeID: string, flag: string, value: string) {
+  if (!batchParameterValues.value[typeID]) batchParameterValues.value[typeID] = {}
+  batchParameterValues.value[typeID][flag] = value
+}
+
 const batchOperationAction = ref<BatchAction>('restart')
 const batchOperationImage = ref('')
 
@@ -47,11 +56,12 @@ function environmentsInProject(projectId: string): Environment[] {
 }
 
 function typesInEnvironment(environmentId: string): ServiceType[] {
-  return types.value.filter((t) => t.environment_id === environmentId && t.project_id === activeProjectId.value)
+  const ids = new Set(instances.value.filter(item => item.project_id === activeProjectId.value && item.environment_id === environmentId).map(item => item.service_type_id))
+  return types.value.filter(item => ids.has(item.id))
 }
 
 function countInType(typeId: string): number {
-  return instances.value.filter((i) => i.service_type_id === typeId).length
+  return environmentInstances.value.filter((i) => i.service_type_id === typeId).length
 }
 
 const activeProject = computed(() => projects.value.find((p) => p.id === activeProjectId.value) || null)
@@ -64,15 +74,13 @@ function imageVersion(image?: string | null): string {
   return separator > image.lastIndexOf('/') ? image.slice(separator + 1) : image
 }
 
-const visibleInstances = computed(() => {
-  const allowedTypes = new Set(typesInEnvironment(activeEnvironmentId.value).map((t) => t.id))
-  return instances.value.filter((i) => allowedTypes.has(i.service_type_id) && (!activeTypeId.value || i.service_type_id === activeTypeId.value))
-})
+const environmentInstances = computed(() => instances.value.filter(item =>
+  item.project_id === activeProjectId.value && item.environment_id === activeEnvironmentId.value,
+))
 
-const environmentInstances = computed(() => {
-  const allowedTypes = new Set(typesInEnvironment(activeEnvironmentId.value).map((type) => type.id))
-  return instances.value.filter((item) => allowedTypes.has(item.service_type_id))
-})
+const visibleInstances = computed(() => environmentInstances.value.filter(item =>
+  !activeTypeId.value || item.service_type_id === activeTypeId.value,
+))
 
 const batchOperationSelectedInstances = computed(() => {
   const selectedIDs = new Set(batchOperationSelectedIDs.value)
@@ -94,7 +102,7 @@ const batchOperationGroups = computed(() => {
   })
 })
 
-const environmentInstanceCount = computed(() => typesInEnvironment(activeEnvironmentId.value).reduce((count, type) => count + countInType(type.id), 0))
+const environmentInstanceCount = computed(() => environmentInstances.value.length)
 
 function selectProject(id: string) {
   activeProjectId.value = id
@@ -212,7 +220,7 @@ async function saveEnvironment() {
 
 async function removeEnvironment(env: Environment) {
   try {
-    await ElMessageBox.confirm(`确定删除环境"${env.name}"吗？删除环境不会自动删除其下的服务类型或实例，但它们将失去所属环境。`, '删除确认', { type: 'warning' })
+    await ElMessageBox.confirm(`确定删除环境"${env.name}"吗？仍有实例使用的环境不能删除。`, '删除确认', { type: 'warning' })
     await environmentApi.remove(env.id)
     ElMessage.success('环境已删除')
     if (activeEnvironmentId.value === env.id) activeEnvironmentId.value = ''
@@ -222,79 +230,54 @@ async function removeEnvironment(env: Environment) {
   }
 }
 
-// -------- 服务类型表单 --------
-const typeDialogVisible = ref(false)
-const editingTypeId = ref('')
-const typeForm = reactive<ServiceTypeForm>({ project_id: '', environment_id: '', name: '', readiness_probe: { type: '', port: 0, path: '/health' } })
-
-function openCreateType() {
-  editingTypeId.value = ''
-  Object.assign(typeForm, {
-    project_id: activeProjectId.value || projects.value[0]?.id || '',
-    environment_id: activeEnvironmentId.value || environmentsInProject(activeProjectId.value)[0]?.id || '',
-    name: '',
-    readiness_probe: { type: '', port: 0, path: '/health' },
-  })
-  typeDialogVisible.value = true
-}
-
-function openEditType(type: ServiceType) {
-  editingTypeId.value = type.id
-  Object.assign(typeForm, { project_id: type.project_id, environment_id: type.environment_id, name: type.name, readiness_probe: type.readiness_probe || { type: '', port: 0, path: '/health' } })
-  typeDialogVisible.value = true
-}
-
-async function saveType() {
-  if (!typeForm.project_id) {
-    ElMessage.warning('请先选择所属项目')
-    return
-  }
-  if (!typeForm.environment_id) {
-    ElMessage.warning('请先选择所属环境')
-    return
-  }
-  if (!typeForm.name.trim()) {
-    ElMessage.warning('请填写类型名称')
-    return
-  }
-  submitting.value = true
-  try {
-    const payload = { ...typeForm, name: typeForm.name.trim() }
-    if (editingTypeId.value) await serviceApi.update(editingTypeId.value, payload)
-    else await serviceApi.create(payload)
-    ElMessage.success(editingTypeId.value ? '服务类型已更新' : '服务类型已创建')
-    typeDialogVisible.value = false
-    await loadAll()
-  } catch (error: any) {
-    ElMessage.error(error?.response?.data?.error || '保存失败')
-  } finally {
-    submitting.value = false
-  }
-}
-
-async function removeType(type: ServiceType) {
-  const relatedCount = countInType(type.id)
-  try {
-    await ElMessageBox.confirm(
-      relatedCount > 0
-        ? `类型"${type.name}"下还有 ${relatedCount} 个服务实例，删除类型不会自动删除实例，但这些实例将失去所属类型。是否继续？`
-        : `确定删除服务类型"${type.name}"吗？`,
-      '删除确认',
-      { type: 'warning' },
-    )
-    await serviceApi.remove(type.id)
-    ElMessage.success('服务类型已删除')
-    if (activeTypeId.value === type.id) activeTypeId.value = ''
-    await loadAll()
-  } catch (error: any) {
-    if (error !== 'cancel' && error !== 'close') ElMessage.error(error?.response?.data?.error || '删除失败')
-  }
+// -------- 服务类型入口 --------
+function openServiceTypes() {
+  void router.push('/services/types')
 }
 
 // -------- 实例表单 --------
 const instanceDialogVisible = ref(false)
 const editingInstanceId = ref('')
-const instanceForm = reactive<ServiceInstanceForm>({ service_type_id: '', host_id: '', name: '', rollout_group: '', image: '', params: [], env_text: '', network: '', port_mapping: '', restart_policy: 'unless-stopped', note: '' })
+const instanceForm = reactive<ServiceInstanceForm>({ project_id: '', environment_id: '', service_type_id: '', host_id: '', name: '', rollout_group: '', image: '', params: [], env_text: '', network: '', port_mapping: '', restart_policy: 'unless-stopped', note: '' })
+function parameterFieldsFor(typeID: string): ServiceParameterField[] {
+  return types.value.find(item => item.id === typeID)?.parameter_fields || []
+}
+
+function initialParameterValues(fields: ServiceParameterField[], params: ServiceParam[] = []) {
+  const stored = new Map((params || []).map(param => [param.flag.trim(), param.value]))
+  return Object.fromEntries(fields.map(field => [field.flag, stored.get(field.flag) ?? field.default_value ?? '']))
+}
+
+function parameterChanges(fields: ServiceParameterField[], values: Record<string, string>, stored: ServiceParam[] = []) {
+  const current = new Map((stored || []).map(param => [param.flag.trim(), param.value]))
+  const changes: Record<string, string> = {}
+  for (const field of fields) {
+    let value = values[field.flag] ?? ''
+    if (field.kind !== 'text') value = value.trim()
+    if (!value.trim()) {
+      if (field.required) {
+        ElMessage.warning(`请填写${field.label}`)
+        return null
+      }
+      value = ''
+    } else if (field.kind === 'integer' && !/^[+-]?\d+$/.test(value)) {
+      ElMessage.warning(`${field.label}必须是整数`)
+      return null
+    } else if (field.kind === 'select' && !field.options?.includes(value)) {
+      ElMessage.warning(`请选择有效的${field.label}`)
+      return null
+    }
+    if (value !== (current.get(field.flag) ?? '')) changes[field.flag] = value
+  }
+  return changes
+}
+
+const createParameterFields = computed(() => parameterFieldsFor(instanceForm.service_type_id))
+const createParameterValues = ref<Record<string, string>>({})
+function resetCreateParameters() {
+  createParameterValues.value = initialParameterValues(createParameterFields.value)
+}
+
 const instanceSubmitting = ref(false)
 const restartPolicyLabels: Record<RestartPolicy, string> = {
   no: '不自动重启',
@@ -311,19 +294,16 @@ function hostBelongsToProject(host: Host, projectId: string): boolean {
 
 const hostById = computed(() => new Map(hosts.value.map((host) => [host.id, host])))
 
-const instanceHostOptions = computed(() => {
-  const serviceType = types.value.find((item) => item.id === instanceForm.service_type_id)
-  if (!serviceType) return []
-  return hosts.value.filter((host) => hostBelongsToProject(host, serviceType.project_id))
-})
+const instanceHostOptions = computed(() => hosts.value.filter(host => hostBelongsToProject(host, instanceForm.project_id)))
 
 function openCreateInstance() {
-  const targetType = activeType.value || typesInEnvironment(activeEnvironmentId.value)[0]
-  if (!targetType) return
+  if (!types.value.length) return
   editingInstanceId.value = ''
   Object.assign(instanceForm, {
-    service_type_id: targetType.id,
-    host_id: hosts.value.find((host) => hostBelongsToProject(host, targetType.project_id))?.id || '',
+    project_id: activeProjectId.value,
+    environment_id: activeEnvironmentId.value,
+    service_type_id: '',
+    host_id: hosts.value.find((host) => hostBelongsToProject(host, activeProjectId.value))?.id || '',
     name: '',
     rollout_group: '',
     image: '',
@@ -334,12 +314,15 @@ function openCreateInstance() {
     restart_policy: 'unless-stopped',
     note: '',
   })
+  resetCreateParameters()
   instanceDialogVisible.value = true
 }
 
 function openEditInstance(item: ServiceInstance) {
   editingInstanceId.value = item.id
   Object.assign(instanceForm, {
+    project_id: item.project_id,
+    environment_id: item.environment_id,
     service_type_id: item.service_type_id,
     host_id: item.host_id,
     name: item.name,
@@ -378,9 +361,15 @@ async function saveInstance(fromDetail = false) {
     ElMessage.warning('请填写镜像')
     return
   }
+  let params = instanceForm.params
+  if (!editingInstanceId.value && createParameterFields.value.length) {
+    const values = parameterChanges(createParameterFields.value, createParameterValues.value)
+    if (!values) return
+    params = Object.entries(values).filter(([, value]) => value !== '').map(([flag, value]) => ({ flag, value }))
+  }
   instanceSubmitting.value = true
   try {
-    const payload = { ...instanceForm, name: instanceForm.name.trim(), image: instanceForm.image.trim() }
+    const payload = { ...instanceForm, params, name: instanceForm.name.trim(), image: instanceForm.image.trim() }
     let saved: ServiceInstance
     if (editingInstanceId.value) saved = await instanceApi.update(editingInstanceId.value, payload)
     else saved = await instanceApi.create(payload)
@@ -536,6 +525,7 @@ function setBatchOperationInstanceSelected(id: string, checked: boolean) {
 
 function openBatchOperationDrawer() {
   if (!environmentInstances.value.length) return
+  batchParameterValues.value = {}
   batchOperationDrawerVisible.value = true
 }
 
@@ -568,11 +558,20 @@ async function runBatchOperation() {
     ElMessage.warning('请填写新的镜像版本')
     return
   }
+  const valuesByType: Record<string, Record<string, string>> = {}
+  if (action !== 'stop') {
+    const selectedTypeIDs = new Set(targets.map(item => item.service_type_id))
+    for (const typeID of selectedTypeIDs) {
+      const values = parameterOverrides(parameterFieldsFor(typeID), batchParameterValues.value[typeID] || {})
+      if (Object.keys(values).length) valuesByType[typeID] = values
+    }
+  }
+  const hasOverrides = Object.keys(valuesByType).length > 0
   batchOperationSubmitting.value = true
   try {
-    if (action !== 'start') {
+    if (action !== 'start' || hasOverrides) {
       await ElMessageBox.confirm(
-        `将对当前环境中选定的 ${targets.length} 个实例执行${batchOperationLabels[action]}，失败项会单独列出。确认继续？`,
+        `将对当前环境中选定的 ${targets.length} 个实例执行${batchOperationLabels[action]}。${hasOverrides ? '填写的参数会应用到对应类型的已选实例。' : ''}失败项会单独列出。确认继续？`,
         `确认批量${batchOperationLabels[action]}`,
         { type: 'warning' },
       )
@@ -583,10 +582,11 @@ async function runBatchOperation() {
   }
   operationPollError.value = ''
   try {
-    const task = await instanceApi.startBatchOperation(targets.map((item) => item.id), action, image)
+    const task = await instanceApi.startBatchOperation(targets.map((item) => item.id), action, image, hasOverrides ? valuesByType : undefined)
     operationTask.value = task
     batchOperationSelectedIDs.value = []
     batchOperationImage.value = ''
+    batchParameterValues.value = {}
     batchOperationDrawerVisible.value = false
     ElMessage.success(`批量${batchOperationLabels[action]}任务已提交，可查看逐项进度`)
     startOperationPolling(task.id)
@@ -673,29 +673,62 @@ function operationProgress(task: ServiceInstanceOperation) {
   return task.total ? Math.round((task.completed / task.total) * 100) : 0
 }
 
-async function deployInstance(row: ServiceInstance) {
-  actionLoadingId.value = row.id
-  try {
-    await instanceApi.deploy(row.id)
-    ElMessage.success(`实例"${row.name}"已部署并启动`)
-    await refreshInstanceStatus(row)
-    if (activeInstanceId.value === row.id) { await loadDetail(row.id); await loadEvents(row.id); await loadDeployments(row.id) }
-  } catch (error: any) {
-    ElMessage.error(error?.response?.data?.error || '部署失败')
-  } finally {
-    actionLoadingId.value = ''
+const parameterAction = ref<{ row: ServiceInstance; action: 'deploy' | 'start' } | null>(null)
+const parameterActionVisible = ref(false)
+const parameterActionFields = computed(() => parameterFieldsFor(parameterAction.value?.row.service_type_id || ''))
+const parameterActionValues = ref<Record<string, string>>({})
+const parameterActionRebuilds = computed(() => {
+  const existing = new Map(parameterAction.value?.row.params?.map(param => [param.flag.trim(), param.value]) || [])
+  return parameterActionFields.value.some(field => {
+    const raw = parameterActionValues.value[field.flag] ?? ''
+    const value = !raw.trim() ? '' : field.kind === 'text' ? raw : raw.trim()
+    return value !== (existing.get(field.flag) ?? '')
+  })
+})
+
+function openInstanceAction(row: ServiceInstance, action: 'deploy' | 'start') {
+  const fields = parameterFieldsFor(row.service_type_id)
+  if (!fields.length) {
+    void executeInstanceAction(row, action)
+    return
   }
+  parameterAction.value = { row, action }
+  parameterActionValues.value = initialParameterValues(fields, row.params)
+  parameterActionVisible.value = true
 }
 
-async function startInstance(row: ServiceInstance) {
+function deployInstance(row: ServiceInstance) {
+  openInstanceAction(row, 'deploy')
+}
+
+function startInstance(row: ServiceInstance) {
+  openInstanceAction(row, 'start')
+}
+
+async function submitInstanceAction() {
+  const target = parameterAction.value
+  if (!target || actionLoadingId.value) return
+  const values = parameterChanges(parameterActionFields.value, parameterActionValues.value, target.row.params)
+  if (!values) return
+  if (await executeInstanceAction(target.row, target.action, values)) parameterActionVisible.value = false
+}
+
+async function executeInstanceAction(row: ServiceInstance, action: 'deploy' | 'start', values?: Record<string, string>) {
   actionLoadingId.value = row.id
   try {
-    await instanceApi.start(row.id)
-    ElMessage.success('已启动')
+    if (action === 'deploy') await instanceApi.deploy(row.id, values)
+    else await instanceApi.start(row.id, values)
+    ElMessage.success(action === 'deploy' ? `实例「${row.name}」已部署并启动` : '已启动')
     await refreshInstanceStatus(row)
-    if (activeInstanceId.value === row.id) { await loadDetail(row.id); await loadEvents(row.id) }
+    if (activeInstanceId.value === row.id) {
+      await loadDetail(row.id)
+      await loadEvents(row.id)
+      if (action === 'deploy' || Object.keys(values || {}).length) await loadDeployments(row.id)
+    }
+    return true
   } catch (error: any) {
-    ElMessage.error(error?.response?.data?.error || '启动失败')
+    ElMessage.error(error?.response?.data?.error || (action === 'deploy' ? '部署失败' : '启动失败'))
+    return false
   } finally {
     actionLoadingId.value = ''
   }
@@ -769,10 +802,13 @@ const updateImageDialogVisible = ref(false)
 const updateImageSubmitting = ref(false)
 const updateImageTarget = ref<ServiceInstance | null>(null)
 const updateImageForm = reactive({ image: '' })
+const updateParameterFields = computed(() => parameterFieldsFor(updateImageTarget.value?.service_type_id || ''))
+const updateParameterValues = ref<Record<string, string>>({})
 
 function openUpdateImage(row: ServiceInstance) {
   updateImageTarget.value = row
   updateImageForm.image = row.image
+  updateParameterValues.value = initialParameterValues(updateParameterFields.value, row.params)
   updateImageDialogVisible.value = true
 }
 
@@ -784,9 +820,13 @@ async function submitUpdateImage() {
     ElMessage.warning('请填写新的镜像标签')
     return
   }
+  const values = updateParameterFields.value.length
+    ? parameterChanges(updateParameterFields.value, updateParameterValues.value, target.params)
+    : undefined
+  if (values === null) return
   updateImageSubmitting.value = true
   try {
-    await instanceApi.updateImage(target.id, image)
+    await instanceApi.updateImage(target.id, image, values)
     ElMessage.success(`实例"${target.name}"已更新为镜像 ${image} 并重新部署`)
     updateImageDialogVisible.value = false
     await loadAll()
@@ -1139,10 +1179,9 @@ onMounted(() => {
     if (servicesDisposed) return
     startStatusPolling()
     const linked = instances.value.find((item) => item.id === route.query.instance)
-    const linkedType = types.value.find((type) => type.id === linked?.service_type_id)
-    if (linked && linkedType) {
-      activeProjectId.value = linkedType.project_id
-      activeEnvironmentId.value = linkedType.environment_id
+    if (linked) {
+      activeProjectId.value = linked.project_id
+      activeEnvironmentId.value = linked.environment_id
       activeTypeId.value = ''
       openInstanceDetails(linked)
     }
@@ -1187,12 +1226,10 @@ onUnmounted(() => {
                 <el-dropdown-item @click="openCreateEnvironment">新增环境</el-dropdown-item>
                 <el-dropdown-item v-if="activeEnvironment" @click="openEditEnvironment(activeEnvironment)">编辑当前环境</el-dropdown-item>
                 <el-dropdown-item v-if="activeEnvironment" @click="removeEnvironment(activeEnvironment)">删除当前环境</el-dropdown-item>
-                <el-dropdown-item v-if="activeEnvironment" divided @click="openCreateType">新增服务类型</el-dropdown-item>
-                <el-dropdown-item v-if="activeType" @click="openEditType(activeType)">编辑当前服务类型</el-dropdown-item>
-                <el-dropdown-item v-if="activeType" @click="removeType(activeType)">删除当前服务类型</el-dropdown-item>
+                <el-dropdown-item v-if="activeEnvironment" divided @click="openServiceTypes">查看服务类型</el-dropdown-item>
               </el-dropdown-menu></template>
             </el-dropdown>
-            <el-button v-if="canManage" type="primary" :icon="Plus" :disabled="!typesInEnvironment(activeEnvironmentId).length" @click="openCreateInstance">部署实例</el-button>
+            <el-button v-if="canManage" type="primary" :icon="Plus" :disabled="!activeEnvironmentId || !types.length" @click="openCreateInstance">部署实例</el-button>
           </div>
         </div>
         <el-alert v-if="loadError" title="数据加载失败，请重试；已有数据可能不是最新状态。" type="error" show-icon :closable="false" class="load-error" />
@@ -1233,8 +1270,8 @@ onUnmounted(() => {
               </div>
             </div>
           </section>
-          <el-empty v-if="!typesInEnvironment(activeEnvironmentId).length" description="当前环境暂无服务类型" :image-size="60">
-            <el-button v-if="canManage" :icon="Plus" @click="openCreateType">添加服务类型</el-button>
+          <el-empty v-if="!types.length" description="暂无全局服务类型" :image-size="60">
+            <el-button v-if="canManage" :icon="Plus" @click="openServiceTypes">查看服务类型</el-button>
           </el-empty>
           <div v-else class="master-detail" v-loading="loading">
             <section class="instance-panel">
@@ -1571,6 +1608,20 @@ onUnmounted(() => {
                     </el-checkbox>
                   </div>
                   <div v-else class="batch-operation-empty-group">该服务类型暂无实例</div>
+                  <el-form
+                    v-if="batchOperationAction !== 'stop' && group.selectedCount && group.type.parameter_fields?.length"
+                    class="batch-parameter-form"
+                    label-width="90px"
+                    :disabled="batchOperationSubmitting"
+                  >
+                    <p class="form-hint">仅对所选实例生效，留空沿用各实例的值。</p>
+                    <ServiceParameterInputs
+                      :fields="group.type.parameter_fields"
+                      :values="batchParameterValues[group.type.id] || {}"
+                      optional-overrides
+                      @change="(flag, value) => setBatchParameterValue(group.type.id, flag, value)"
+                    />
+                  </el-form>
                 </section>
               </div>
               <el-empty v-else description="当前环境暂无可操作的实例" :image-size="72" />
@@ -1611,40 +1662,16 @@ onUnmounted(() => {
       </template>
     </el-dialog>
 
-    <!-- 服务类型表单 -->
-    <el-dialog v-model="typeDialogVisible" :title="editingTypeId ? '编辑服务类型' : '添加服务类型'" width="560px" destroy-on-close>
-      <el-form label-width="100px">
-        <el-form-item label="所属项目" required>
-          <el-select
-            v-model="typeForm.project_id"
-            placeholder="请选择项目"
-            style="width: 100%"
-            @change="typeForm.environment_id = ''"
-          >
-            <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="所属环境" required>
-          <el-select v-model="typeForm.environment_id" placeholder="请选择环境" style="width: 100%">
-            <el-option v-for="env in environmentsInProject(typeForm.project_id)" :key="env.id" :label="env.name" :value="env.id" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="类型名称" required>
-          <el-input v-model="typeForm.name" placeholder="例如 game、battle、gate" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="typeDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="saveType">保存</el-button>
-      </template>
-    </el-dialog>
+
 
     <!-- 实例表单 -->
     <el-dialog v-model="instanceDialogVisible" :title="editingInstanceId ? '编辑实例' : '部署实例'" width="800px" destroy-on-close>
       <el-form label-width="90px">
+        <el-form-item label="所属项目">{{ activeProject?.name }}</el-form-item>
+        <el-form-item label="所属环境">{{ activeEnvironment?.name }}</el-form-item>
         <el-form-item label="服务类型" required>
-          <el-select v-model="instanceForm.service_type_id" :disabled="!!editingInstanceId" style="width: 100%" placeholder="选择服务类型">
-            <el-option v-for="type in typesInEnvironment(activeEnvironmentId)" :key="type.id" :label="type.name" :value="type.id" />
+          <el-select v-model="instanceForm.service_type_id" filterable @change="resetCreateParameters" :disabled="!!editingInstanceId" style="width: 100%" placeholder="选择服务类型">
+            <el-option v-for="type in types" :key="type.id" :label="type.name" :value="type.id" />
           </el-select>
         </el-form-item>
         <el-form-item label="部署主机" required>
@@ -1664,6 +1691,11 @@ onUnmounted(() => {
         <el-form-item label="镜像" required>
           <el-input v-model="instanceForm.image" placeholder="例如 gogs-game:v1001-3" />
         </el-form-item>
+        <ServiceParameterInputs
+          :fields="createParameterFields"
+          :values="createParameterValues"
+          @change="(flag, value) => createParameterValues[flag] = value"
+        />
         <el-form-item label="重启策略">
           <el-select v-model="instanceForm.restart_policy" style="width: 100%">
             <el-option label="不自动重启" value="no" />
@@ -1688,7 +1720,7 @@ onUnmounted(() => {
             placeholder="默认预填项目环境变量模板，可在此自由修改（仅影响当前实例，不影响项目模板）"
           />
           <div class="form-hint">
-            支持 KEY=VALUE 环境变量；启动参数请单独一行填写，如 <code>--server-id 1001</code>（会作为容器启动命令参数传给程序，缺少必需参数可能导致服务启动后立即退出、看不到日志）。如需额外端口映射，也可单独一行填写 <code>-p 主机端口:容器端口</code>（如 <code>-p 9001:9001</code>，UDP 加 <code>/udp</code>），会与上方"端口映射"字段共同生效。
+            支持 KEY=VALUE 环境变量；未在上方表单配置的启动参数可单独一行填写，如 <code>--server-id 1001</code>（会作为容器启动命令参数传给程序，缺少必需参数可能导致服务启动后立即退出、看不到日志）。如需额外端口映射，也可单独一行填写 <code>-p 主机端口:容器端口</code>（如 <code>-p 9001:9001</code>，UDP 加 <code>/udp</code>），会与上方"端口映射"字段共同生效。
           </div>
         </el-form-item>
         <el-form-item label="备注">
@@ -1701,6 +1733,33 @@ onUnmounted(() => {
       </template>
     </el-dialog>
 
+    <el-dialog
+      v-model="parameterActionVisible"
+      :title="`${parameterAction?.action === 'start' ? '启动实例' : '部署实例'} - ${parameterAction?.row.name || ''}`"
+      width="min(560px, 94vw)"
+      destroy-on-close
+    >
+      <el-form label-width="90px">
+        <ServiceParameterInputs
+          :fields="parameterActionFields"
+          :values="parameterActionValues"
+          @change="(flag, value) => parameterActionValues[flag] = value"
+        />
+      </el-form>
+      <el-alert
+        v-if="parameterAction?.action === 'start' && parameterActionRebuilds"
+        title="参数有变化，将使用当前镜像重建容器并启动。"
+        type="warning"
+        :closable="false"
+      />
+      <template #footer>
+        <el-button @click="parameterActionVisible = false">取消</el-button>
+        <el-button type="primary" :loading="actionLoadingId === parameterAction?.row.id" @click="submitInstanceAction">
+          {{ parameterAction?.action === 'deploy' ? '部署' : parameterActionRebuilds ? '重建并启动' : '启动' }}
+        </el-button>
+      </template>
+    </el-dialog>
+
     <!-- 更新镜像 -->
     <el-dialog v-model="updateImageDialogVisible" :title="`更新镜像 - ${updateImageTarget?.name || ''}`" width="520px" destroy-on-close>
       <el-form label-width="90px">
@@ -1710,8 +1769,13 @@ onUnmounted(() => {
         <el-form-item label="新镜像" required>
           <el-input v-model="updateImageForm.image" placeholder="例如 gogs-game:v1002-5" />
         </el-form-item>
+        <ServiceParameterInputs
+          :fields="updateParameterFields"
+          :values="updateParameterValues"
+          @change="(flag, value) => updateParameterValues[flag] = value"
+        />
       </el-form>
-      <div class="form-hint">更新后会拉取新镜像并重新部署容器，启动参数、环境变量和端口映射保持不变。</div>
+      <div class="form-hint">更新后会拉取新镜像并重新部署容器，未修改的启动参数、环境变量和端口映射会保留。</div>
       <template #footer>
         <el-button @click="updateImageDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="updateImageSubmitting" @click="submitUpdateImage">更新</el-button>
@@ -1815,6 +1879,8 @@ onUnmounted(() => {
 .batch-operation-groups::-webkit-scrollbar { width: 4px; }
 .batch-operation-groups::-webkit-scrollbar-thumb { border-radius: 4px; background: #c5cfdd; }
 .batch-operation-group { flex-shrink: 0; padding: 11px; border: 1px solid #e8edf4; border-radius: 9px; background: #fff; }
+.batch-parameter-form { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--ops-border); }
+.batch-parameter-form :deep(.el-form-item:last-child) { margin-bottom: 0; }
 .batch-operation-group-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 24px; }
 .batch-operation-group-heading > span { color: var(--ops-text-secondary); font-size: 11px; }
 .batch-operation-group-heading :deep(.el-checkbox__label) { color: var(--ops-text); font-size: 13px; font-weight: 600; }

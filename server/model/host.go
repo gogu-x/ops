@@ -52,6 +52,8 @@ type ContainerSpec struct {
 // used to look up/filter containers belonging to a specific instance.
 const OpsInstanceLabel = "ops.instance_id"
 
+var serviceParamFlagPattern = regexp.MustCompile(`^-{1,2}[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
+
 var instanceNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 
 const DefaultRestartPolicy = "unless-stopped"
@@ -62,6 +64,10 @@ func NormalizeRestartPolicy(policy string) string {
 		return DefaultRestartPolicy
 	}
 	return policy
+}
+
+func ValidServiceParamFlag(flag string) bool {
+	return serviceParamFlagPattern.MatchString(flag)
 }
 
 // ValidateServiceInstance checks that a service instance's fields are
@@ -85,8 +91,8 @@ func ValidateServiceInstance(item ServiceInstance) error {
 		return errors.New("restart_policy must be one of: no, always, unless-stopped, on-failure")
 	}
 	for index, param := range item.Params {
-		if !strings.HasPrefix(strings.TrimSpace(param.Flag), "--") {
-			return fmt.Errorf("params[%d].flag must start with --", index)
+		if !ValidServiceParamFlag(strings.TrimSpace(param.Flag)) {
+			return fmt.Errorf("params[%d].flag must be a valid command-line flag", index)
 		}
 		if strings.TrimSpace(param.Value) == "" {
 			return fmt.Errorf("params[%d].value is required", index)

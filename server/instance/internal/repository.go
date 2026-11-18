@@ -61,7 +61,7 @@ func (r *MemoryRepository) Create(_ context.Context, item model.ServiceInstance)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, existing := range r.items {
-		if existing.ServiceTypeID == item.ServiceTypeID && existing.Name == item.Name {
+		if existing.ProjectID == item.ProjectID && existing.EnvironmentID == item.EnvironmentID && existing.ServiceTypeID == item.ServiceTypeID && existing.Name == item.Name {
 			return ErrAlreadyExists
 		}
 	}
@@ -76,7 +76,7 @@ func (r *MemoryRepository) Update(_ context.Context, item model.ServiceInstance)
 		return ErrNotFound
 	}
 	for id, existing := range r.items {
-		if id != item.ID && existing.ServiceTypeID == item.ServiceTypeID && existing.Name == item.Name {
+		if id != item.ID && existing.ProjectID == item.ProjectID && existing.EnvironmentID == item.EnvironmentID && existing.ServiceTypeID == item.ServiceTypeID && existing.Name == item.Name {
 			return ErrAlreadyExists
 		}
 	}

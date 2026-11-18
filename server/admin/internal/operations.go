@@ -92,22 +92,34 @@ func (m *serviceOperationManager) start(ownerID, operator string, request model.
 		m.busyIDs[item.ID] = operation.ID
 	}
 	m.mu.Unlock()
-	go m.run(operation.ID, operator, request)
+	valuesByInstance := make(map[string]map[string]string)
+	for _, item := range instances {
+		if values := request.ParameterValuesByType[item.ServiceTypeID]; len(values) > 0 {
+			valuesByInstance[item.ID] = values
+		}
+	}
+	go m.run(operation.ID, operator, request, valuesByInstance)
 	return operation, nil
 }
 
-func (m *serviceOperationManager) run(id, operator string, request model.ServiceInstanceBatchOperationRequest) {
+func (m *serviceOperationManager) run(id, operator string, request model.ServiceInstanceBatchOperationRequest, valuesByInstance map[string]map[string]string) {
 	for index := range request.InstanceIDs {
 		m.updateItem(id, index, "running", "")
 		instanceID := request.InstanceIDs[index]
+		ctx := context.Background()
+		values := valuesByInstance[instanceID]
 		var err error
 		switch request.Action {
 		case "deploy":
-			_, err = m.app.DeployInstance(context.Background(), instanceID, operator)
+			_, err = m.app.DeployInstanceWithParameters(ctx, instanceID, operator, values)
 		case "update_image":
-			_, err = m.app.UpdateInstanceImage(context.Background(), instanceID, request.Image, operator)
-		case "start", "stop", "restart":
-			err = m.app.ContainerAction(instanceID, request.Action)
+			_, err = m.app.UpdateInstanceImageWithParameters(ctx, instanceID, request.Image, operator, values)
+		case "start":
+			err = m.app.StartInstanceWithParameters(ctx, instanceID, operator, values)
+		case "restart":
+			err = m.app.RestartInstanceWithParameters(ctx, instanceID, operator, values)
+		case "stop":
+			err = m.app.ContainerAction(instanceID, "stop")
 		}
 		if err != nil {
 			m.updateItem(id, index, "failed", err.Error())

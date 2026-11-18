@@ -27,9 +27,9 @@ const canReadServices = computed(() => auth.hasPermission('services.view') || au
 const canReadHosts = computed(() => auth.hasPermission('hosts.view') || canReadServices.value)
 const summaryReady = computed(() => projects.value !== null && (!canReadServices.value || (environments.value !== null && types.value !== null && instances.value !== null)))
 const scopedProjects = computed(() => (projects.value || []).filter((project) => !selectedProject.value || project.id === selectedProject.value))
-const scopedInstances = computed(() => scopeInstances(instances.value || [], types.value || [], selectedProject.value))
+const scopedInstances = computed(() => scopeInstances(instances.value || [], selectedProject.value))
 const scopedEnvironments = computed(() => (environments.value || []).filter((env) => !selectedProject.value || env.project_id === selectedProject.value))
-const scopedTypes = computed(() => (types.value || []).filter((type) => !selectedProject.value || type.project_id === selectedProject.value))
+const scopedTypes = computed(() => selectedProject.value ? new Set(scopedInstances.value.map(item => item.service_type_id)).size : (types.value || []).length)
 const scopedHosts = computed(() => (hosts.value || []).filter((host) => !selectedProject.value || hostHasProject(host, selectedProject.value)))
 const counts = computed(() => statusCounts(scopedInstances.value))
 const running = computed(() => counts.value.find((item) => item.key === 'running')!.count)
@@ -37,7 +37,7 @@ const attention = computed(() => scopedInstances.value.filter(needsAttention).so
   const order = { error: 0, restarting: 1, unknown: 2 }
   return (order[normalizedStatus(a) as keyof typeof order] ?? 3) - (order[normalizedStatus(b) as keyof typeof order] ?? 3)
 }))
-const overview = computed(() => projectOverview(scopedProjects.value, environments.value || [], types.value || [], instances.value || [], hosts.value || []))
+const overview = computed(() => projectOverview(scopedProjects.value, environments.value || [], instances.value || [], hosts.value || []))
 const ringStyle = computed(() => {
   if (!scopedInstances.value.length || !summaryReady.value) return { background: 'var(--ops-border)' }
   let offset = 0
@@ -50,16 +50,14 @@ const ringStyle = computed(() => {
 })
 
 function openServices(project = selectedProject.value, instance?: ServiceInstance) {
-  const type = types.value?.find((type) => type.id === instance?.service_type_id)
-  router.push({ path: '/services', query: { ...(project || type?.project_id ? { project: project || type?.project_id } : {}), ...(instance ? { instance: instance.id } : {}) } })
+  router.push({ path: '/services', query: { ...(instance?.project_id || project ? { project: instance?.project_id || project } : {}), ...(instance ? { instance: instance.id } : {}) } })
 }
 function openProjectRow(row: { id: string }) {
   if (auth.hasPermission('services.view')) openServices(row.id)
   else if (auth.hasPermission('projects.view')) router.push('/projects')
 }
 function instanceScope(instance: ServiceInstance) {
-  const type = types.value?.find((type) => type.id === instance.service_type_id)
-  return [projects.value?.find((project) => project.id === type?.project_id)?.name, environments.value?.find((env) => env.id === type?.environment_id)?.name].filter(Boolean).join(' / ') || '资源归属待检查'
+  return [projects.value?.find((project) => project.id === instance.project_id)?.name, environments.value?.find((env) => env.id === instance.environment_id)?.name].filter(Boolean).join(' / ') || '资源归属待检查'
 }
 function attentionReason(instance: ServiceInstance) {
   return instance.deploy_error || instance.status_text || (normalizedStatus(instance) === 'unknown' ? '无法确定当前容器状态' : normalizedStatus(instance) === 'restarting' ? '容器正在重启，请检查运行日志' : '实例运行异常')
@@ -135,7 +133,7 @@ onUnmounted(() => { disposed = true; eventRequest++ })
     <div class="dashboard-metrics">
       <button class="metric-card" :disabled="!canReadServices" @click="openServices()"><span class="metric-label">服务实例<el-icon><Box /></el-icon></span><strong>{{ canReadServices && summaryReady ? scopedInstances.length : '—' }}<small>个</small></strong><span class="metric-caption"><span v-if="canReadServices && summaryReady" class="success-text">{{ running }} 个运行中</span><span v-else>无服务查看权限</span> · 当前状态</span></button>
       <button class="metric-card" @click="auth.hasPermission('projects.view') ? router.push('/projects') : router.push('/services')"><span class="metric-label">项目 / 环境<el-icon><FolderOpened /></el-icon></span><strong>{{ projects !== null ? scopedProjects.length : '—' }}<small>/ {{ environments !== null && canReadServices ? scopedEnvironments.length : '—' }}</small></strong><span class="metric-caption">按项目组织部署环境</span></button>
-      <button class="metric-card" :disabled="!auth.hasPermission('services.view') && !auth.hasPermission('projects.view')" @click="openServices()"><span class="metric-label">服务类型<el-icon><Grid /></el-icon></span><strong>{{ (auth.hasPermission('services.view') || auth.hasPermission('projects.view')) && types !== null ? scopedTypes.length : '—' }}<small>类</small></strong><span class="metric-caption">项目内的服务分类</span></button>
+      <button class="metric-card" :disabled="!auth.hasPermission('services.view') && !auth.hasPermission('projects.view')" @click="openServices()"><span class="metric-label">服务类型<el-icon><Grid /></el-icon></span><strong>{{ (auth.hasPermission('services.view') || auth.hasPermission('projects.view')) && types !== null ? scopedTypes : '—' }}<small>类</small></strong><span class="metric-caption">全局类型或当前项目已使用的类型</span></button>
       <button class="metric-card" @click="router.push('/hosts')"><span class="metric-label">部署主机<el-icon><Monitor /></el-icon></span><strong>{{ hosts !== null ? scopedHosts.length : '—' }}<small>台</small></strong><span class="metric-caption">跨项目共享 · 去重统计</span></button>
     </div>
     <div class="dashboard-columns">

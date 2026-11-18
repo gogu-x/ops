@@ -5,7 +5,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"github.com/gogu-x/ops/admin/internal/store"
+	"github.com/gogu-x/ops/admin/internal/users"
 	"github.com/gogu-x/ops/model"
 )
 
@@ -94,10 +94,10 @@ func (a *AdminService) validateAssignedProjects(c *gin.Context, ids []string) er
 
 func writeUserError(c *gin.Context, err error) {
 	status := http.StatusBadRequest
-	if errors.Is(err, store.ErrAlreadyExists) {
+	if errors.Is(err, users.ErrAlreadyExists) {
 		status = http.StatusConflict
 	}
-	if errors.Is(err, store.ErrNotFound) {
+	if errors.Is(err, users.ErrNotFound) {
 		status = http.StatusNotFound
 	}
 	c.JSON(status, gin.H{"ok": false, "error": err.Error()})

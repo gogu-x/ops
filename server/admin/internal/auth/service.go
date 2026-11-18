@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gogu-x/ops/admin/internal/store"
+	"github.com/gogu-x/ops/admin/internal/users"
 	"github.com/gogu-x/ops/conf"
 	"github.com/gogu-x/ops/model"
 	"github.com/golang-jwt/jwt/v5"
@@ -26,7 +26,7 @@ type Claims struct {
 }
 
 type Service struct {
-	repo store.Repository
+	repo users.Repository
 }
 
 var usernamePattern = regexp.MustCompile(`^[A-Za-z0-9_.-]{3,64}$`)
@@ -48,7 +48,7 @@ func (s *Service) CreateManagedUser(ctx context.Context, user model.User, passwo
 	if err != nil {
 		return model.User{}, err
 	}
-	created := store.NewUser(user.Username, string(hash), user.Role)
+	created := users.NewUser(user.Username, string(hash), user.Role)
 	created.ProjectIDs = user.ProjectIDs
 	created.Permissions = user.Permissions
 	created.Disabled = user.Disabled
@@ -140,16 +140,25 @@ func normalizeAccess(user *model.User) error {
 		}
 	}
 	user.Permissions = permissions
-	if user.Role == model.RoleUser && len(user.ProjectIDs) == 0 {
-		return errors.New("普通用户至少需要分配一个项目")
-	}
-	if user.Role == model.RoleUser && len(user.Permissions) == 0 {
-		return errors.New("普通用户至少需要一项功能权限")
+	if user.Role == model.RoleUser {
+		if len(user.Permissions) == 0 {
+			return errors.New("普通用户至少需要一项功能权限")
+		}
+		if seenPermissions[model.PermissionRolloutTemplatesManage] && !seenPermissions[model.PermissionServicesManage] {
+			return errors.New("管理全局发布模板需要同时授予管理服务权限")
+		}
+		if len(user.ProjectIDs) == 0 {
+			for _, permission := range user.Permissions {
+				if permission != model.PermissionServiceTypesView && permission != model.PermissionServiceTypesManage {
+					return errors.New("该用户的功能权限需要至少分配一个项目")
+				}
+			}
+		}
 	}
 	return nil
 }
 
-func NewService(repo store.Repository) *Service {
+func NewService(repo users.Repository) *Service {
 	return &Service{repo: repo}
 }
 
@@ -176,7 +185,7 @@ func (s *Service) Bootstrap(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return s.repo.CreateUser(ctx, store.NewUser("admin", string(hash), "admin"))
+	return s.repo.CreateUser(ctx, users.NewUser("admin", string(hash), "admin"))
 }
 
 func (s *Service) Login(ctx context.Context, username, password string) (model.TokenResponse, error) {
@@ -208,7 +217,7 @@ func (s *Service) Logout(ctx context.Context, raw string) error {
 		return nil
 	}
 	_, err := s.repo.ConsumeRefreshToken(ctx, hashToken(raw), time.Now().UTC())
-	if errors.Is(err, store.ErrNotFound) {
+	if errors.Is(err, users.ErrNotFound) {
 		return nil
 	}
 	return err

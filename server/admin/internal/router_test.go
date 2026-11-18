@@ -13,8 +13,8 @@ import (
 	"github.com/gogu-x/ops/admin/internal/auth"
 	"github.com/gogu-x/ops/admin/internal/environment"
 	"github.com/gogu-x/ops/admin/internal/project"
-	"github.com/gogu-x/ops/admin/internal/service"
-	"github.com/gogu-x/ops/admin/internal/store"
+	"github.com/gogu-x/ops/admin/internal/servicetype"
+	"github.com/gogu-x/ops/admin/internal/users"
 	"github.com/gogu-x/ops/conf"
 	"github.com/gogu-x/ops/instance"
 	"github.com/gogu-x/ops/model"
@@ -27,12 +27,12 @@ func newTestActor(t *testing.T) *AdminService {
 	conf.RefreshTTLDays = 7
 	conf.AdminPassword = "admin-password"
 
-	repo := store.NewMemoryRepository()
+	repo := users.NewMemoryRepository()
 	app := application.New(
 		application.NewTreeGateway(20*time.Second),
 		project.NewMemoryRepository(),
 		environment.NewMemoryRepository(),
-		service.NewMemoryRepository(),
+		servicetype.NewMemoryRepository(),
 		instance.NewMemoryRepository(),
 	)
 	a := &AdminService{auth: auth.NewService(repo), app: app}

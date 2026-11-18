@@ -12,8 +12,9 @@ import (
 	"github.com/gogu-x/ops/admin/internal/auth"
 	"github.com/gogu-x/ops/admin/internal/environment"
 	"github.com/gogu-x/ops/admin/internal/project"
-	"github.com/gogu-x/ops/admin/internal/service"
-	"github.com/gogu-x/ops/admin/internal/store"
+	"github.com/gogu-x/ops/admin/internal/rollout"
+	"github.com/gogu-x/ops/admin/internal/servicetype"
+	"github.com/gogu-x/ops/admin/internal/users"
 	"github.com/gogu-x/ops/conf"
 	"github.com/gogu-x/ops/instance"
 	"github.com/gogu-x/tree"
@@ -23,12 +24,12 @@ import (
 // AdminService owns the HTTP server lifecycle. Request handling is split by resource
 // into handler_*.go files so this type remains an infrastructure boundary.
 type AdminService struct {
-	auth        *auth.Service
-	http        *http.Server
-	app         *application.Service
-	operations  *serviceOperationManager
-	rolloutRepo rolloutRepository
-	rollouts    *rolloutManager
+	ensureServiceTypeIndexes func(context.Context) error
+	auth                     *auth.Service
+	http                     *http.Server
+	app                      *application.Service
+	operations               *serviceOperationManager
+	rollouts                 *rollout.Manager
 }
 
 // NewAdminService wires the admin actor's dependencies: a Mongo-backed auth
@@ -37,32 +38,41 @@ type AdminService struct {
 // the actor Gateway (ops-host), since the host actor owns its own Mongo
 // repository.
 func NewAdminService(mongodbData *mongo.Database) *AdminService {
-	authRepo := store.NewMongoRepository(mongodbData)
+	authRepo := users.NewMongoRepository(mongodbData)
+	serviceTypes := servicetype.NewMongoRepository(mongodbData)
 	app := application.New(
 		application.NewTreeGateway(20*time.Second),
 		project.NewMongoRepository(mongodbData),
 		environment.NewMongoRepository(mongodbData),
-		service.NewMongoRepository(mongodbData),
+		serviceTypes,
 		instance.NewMongoRepository(mongodbData),
 	)
-	var rolloutRepo rolloutRepository
+	var rolloutRepo rollout.Repository
 	if mongodbData == nil {
-		rolloutRepo = newMemoryRolloutRepository()
+		rolloutRepo = rollout.NewMemoryRepository()
 	} else {
-		rolloutRepo = newMongoRolloutRepository(mongodbData)
+		rolloutRepo = rollout.NewMongoRepository(mongodbData)
 	}
 	return &AdminService{
-		auth:        auth.NewService(authRepo),
-		app:         app,
-		rolloutRepo: rolloutRepo,
-		rollouts:    newRolloutManager(rolloutRepo, app),
-		operations:  newServiceOperationManager(app, rolloutRepo),
+		ensureServiceTypeIndexes: serviceTypes.EnsureIndexes,
+		auth:                     auth.NewService(authRepo),
+		app:                      app,
+		rollouts:                 rollout.NewManager(rolloutRepo, app),
+		operations:               newServiceOperationManager(app, rolloutRepo),
 	}
 }
 
 func (a *AdminService) Name() string { return "ops-http" }
 
 func (a *AdminService) OnInit(_ tree.Context) {
+	if a.ensureServiceTypeIndexes != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err := a.ensureServiceTypeIndexes(ctx)
+		cancel()
+		if err != nil {
+			panic("initialize service type indexes: " + err.Error())
+		}
+	}
 
 	if err := a.auth.Bootstrap(context.Background()); err != nil {
 		panic("bootstrap admin: " + err.Error())

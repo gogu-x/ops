@@ -1,7 +1,6 @@
 package internal
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -10,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gogu-x/ops/admin/internal/rollout"
+	"github.com/gogu-x/ops/admin/internal/servicetype"
 	"github.com/gogu-x/ops/model"
 )
 
@@ -103,18 +104,18 @@ func (a *AdminService) createRollout(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "服务实例不存在"})
 			return
 		}
-		typeConfig, ok := typeByID[live.ServiceTypeID]
+		_, ok = typeByID[live.ServiceTypeID]
 		if !ok {
 			c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "服务实例所属项目不存在"})
 			return
 		}
-		if user.Role != model.RoleAdmin && !user.HasProject(typeConfig.ProjectID) {
+		if user.Role != model.RoleAdmin && !user.HasProject(live.ProjectID) {
 			c.JSON(http.StatusForbidden, gin.H{"ok": false, "error": "滚动发布只能包含已授权项目的服务实例"})
 			return
 		}
 		selected = append(selected, live)
 	}
-	if !rolloutHasSingleServiceType(selected) {
+	if !rollout.HasSingleServiceType(selected) {
 		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "一个滚动发布任务只能包含同一服务类型的实例"})
 		return
 	}
@@ -126,16 +127,23 @@ func (a *AdminService) createRollout(c *gin.Context) {
 			return
 		}
 		if projectID == "" {
-			projectID = typeConfig.ProjectID
-		} else if projectID != typeConfig.ProjectID {
+			projectID = item.ProjectID
+		} else if projectID != item.ProjectID {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "一个滚动发布任务只能包含同一项目的实例"})
 			return
 		}
-		if err := validateRolloutProbe(typeConfig.ReadinessProbe); err != nil {
+		if len(request.ParameterValues) > 0 {
+			if _, err := servicetype.MergeParameterValues(typeConfig.ParameterFields, item.Params, request.ParameterValues); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": fmt.Sprintf("实例 %s：%v", item.Name, err)})
+				return
+			}
+		}
+		probe := rollout.EffectiveProbe(request, typeConfig)
+		if err := rollout.ValidateProbe(probe); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": fmt.Sprintf("服务类型 %s：%v", typeConfig.Name, err)})
 			return
 		}
-		if typeConfig.ReadinessProbe.Type == "tcp" || typeConfig.ReadinessProbe.Type == "http" {
+		if probe.Type == "tcp" || probe.Type == "http" {
 			host, exists := hostByID[item.HostID]
 			if !exists {
 				c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": fmt.Sprintf("实例 %s 的部署主机不存在", item.Name)})
@@ -155,46 +163,7 @@ func (a *AdminService) createRollout(c *gin.Context) {
 			}
 		}
 	}
-	groupPlans := make(map[string]model.RolloutGroupPlan)
-	for _, item := range allInstances {
-		typeConfig, ok := typeByID[item.ServiceTypeID]
-		if !ok || typeConfig.ProjectID != projectID {
-			continue
-		}
-		key, name := rolloutGroup(item, typeConfig, hostByID[item.HostID])
-		plan, exists := groupPlans[key]
-		if !exists {
-			plan = model.RolloutGroupPlan{Key: key, Name: name, ProjectID: projectID, MaxUnavailable: request.MaxUnavailablePerGroup, MaxParallel: request.MaxParallelPerGroup}
-		}
-		if item.Status != model.StatusRunning {
-			plan.InitialUnavailable++
-		}
-		groupPlans[key] = plan
-	}
-	groups := make([]model.RolloutGroupPlan, 0, len(groupPlans))
-	for _, group := range groupPlans {
-		groups = append(groups, group)
-	}
-	items := make([]model.RolloutItem, 0, len(selected))
-	for _, item := range selected {
-		typeConfig := typeByID[item.ServiceTypeID]
-		key, _ := rolloutGroup(item, typeConfig, hostByID[item.HostID])
-		target := item.Image
-		if request.Action == "update_image" {
-			target = request.Image
-		}
-		items = append(items, model.RolloutItem{
-			InstanceID:          item.ID,
-			Name:                item.Name,
-			HostID:              item.HostID,
-			PreviousContainerID: item.ContainerID,
-			GroupKey:            key,
-			PreviousImage:       item.Image,
-			TargetImage:         target,
-			ReadinessProbe:      typeConfig.ReadinessProbe,
-			InitiallyAvailable:  item.Status == model.StatusRunning,
-		})
-	}
+	groups, items := rollout.BuildPlan(request, projectID, selected, allInstances, typeByID, hostByID)
 	job := model.RolloutJob{
 		ProjectID:              projectID,
 		OwnerID:                currentUser(c).ID,
@@ -222,48 +191,6 @@ func (a *AdminService) createRollout(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusAccepted, gin.H{"ok": true, "data": detail})
-}
-
-func validateRolloutProbe(probe model.ReadinessProbe) error {
-	switch probe.Type {
-	case "docker", "tcp":
-	case "http":
-		if probe.Path != "" && !strings.HasPrefix(probe.Path, "/") {
-			return errors.New("HTTP 探针路径必须以 / 开头")
-		}
-	case "":
-		return errors.New("尚未配置就绪检查，请在服务类型中设置 Docker、TCP 或 HTTP 探针")
-	default:
-		return errors.New("就绪检查类型无效")
-	}
-	if (probe.Type == "tcp" || probe.Type == "http") && (probe.Port < 1 || probe.Port > 65535) {
-		return errors.New("TCP/HTTP 探针端口必须在 1 到 65535 之间")
-	}
-	return nil
-}
-
-func rolloutGroup(instance model.ServiceInstance, serviceType model.ServiceType, host model.Host) (string, string) {
-	region := strings.TrimSpace(host.Region)
-	if region == "" {
-		region = "未标注机房"
-	}
-	zone := strings.TrimSpace(host.Zone)
-	if zone == "" {
-		zone = instance.HostID
-	}
-	group := strings.TrimSpace(instance.RolloutGroup)
-	if group == "" {
-		group = serviceType.Name
-	}
-	keyParts := []string{serviceType.ProjectID, serviceType.EnvironmentID, serviceType.ID, region, zone, group}
-	encodedKey, _ := json.Marshal(keyParts)
-	key := string(encodedKey)
-	zoneName := host.Zone
-	if strings.TrimSpace(zoneName) == "" {
-		zoneName = host.Name
-	}
-	name := strings.Join([]string{region, zoneName, serviceType.Name, group}, " / ")
-	return key, name
 }
 
 func (a *AdminService) listRollouts(c *gin.Context) {
@@ -341,17 +268,4 @@ func (a *AdminService) retryFailedRollout(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
-}
-
-func rolloutHasSingleServiceType(instances []model.ServiceInstance) bool {
-	if len(instances) == 0 {
-		return false
-	}
-	serviceTypeID := instances[0].ServiceTypeID
-	for _, instance := range instances[1:] {
-		if instance.ServiceTypeID != serviceTypeID {
-			return false
-		}
-	}
-	return true
 }

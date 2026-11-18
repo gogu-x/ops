@@ -3,24 +3,58 @@ import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh } from '@element-plus/icons-vue'
 import AppLayout from '../components/AppLayout.vue'
+import ServiceParameterInputs from '../components/ServiceParameterInputs.vue'
+import { parameterOverrides } from '../utils/parameterOverrides'
 import { useAuthStore } from '../stores/auth'
 import { projectApi, type Project } from '../api/projects'
 import { environmentApi, type Environment } from '../api/environments'
 import { serviceApi, type ServiceType } from '../api/services'
 import { hostApi, type Host } from '../api/hosts'
 import { instanceApi, type ServiceInstance } from '../api/instances'
-import { rolloutApi, type RolloutAction, type RolloutDetail, type RolloutJob } from '../api/rollouts'
+import { rolloutApi, type HealthStrategy, type ReleaseStrategy, type StrategyTemplate, type RolloutAction, type RolloutDetail, type RolloutJob } from '../api/rollouts'
 
-type ProbeType = ServiceType['readiness_probe']['type']
-
+type Probe = ServiceType['readiness_probe']
 interface RolloutTargetGroup {
   key: string
   name: string
   instances: ServiceInstance[]
 }
 
+const builtInStrategies = [
+  {
+    id: 'careful',
+    name: '稳健策略',
+    maxUnavailable: 1,
+    maxParallel: 2,
+    maxParallelPerGroup: 1,
+  },
+  {
+    id: 'balanced',
+    name: '标准策略',
+    maxUnavailable: 1,
+    maxParallel: 5,
+    maxParallelPerGroup: 2,
+  },
+  {
+    id: 'fast',
+    name: '快速策略',
+    maxUnavailable: 2,
+    maxParallel: 10,
+    maxParallelPerGroup: 5,
+  },
+] as const
+const templates = ref<StrategyTemplate[]>([])
+const rolloutStrategies = computed(() => [
+  ...builtInStrategies,
+  ...templates.value.filter(item => item.kind === 'release'),
+])
+const templateSaving = ref(false)
+const releaseDialogVisible = ref(false)
+const releaseForm = reactive<ReleaseStrategy>({ name: '', maxUnavailable: 1, maxParallel: 5, maxParallelPerGroup: 2 })
+
 const auth = useAuthStore()
 const canManage = computed(() => auth.hasPermission('services.manage'))
+const canManageTemplates = computed(() => canManage.value && auth.hasPermission('rollout_templates.manage'))
 const loading = ref(false)
 const loadError = ref('')
 const projects = ref<Project[]>([])
@@ -34,9 +68,7 @@ const selectedTypeID = ref('')
 const keyword = ref('')
 const selectedIDs = ref<string[]>([])
 const submitting = ref(false)
-const probeSubmitting = ref(false)
 const probeDialogVisible = ref(false)
-const editingProbeTypeID = ref('')
 const createVisible = ref(false)
 const detailVisible = ref(false)
 const rolloutDetail = ref<RolloutDetail | null>(null)
@@ -47,12 +79,12 @@ let refreshTimer: ReturnType<typeof setInterval> | undefined
 const rolloutForm = reactive({
   action: 'update_image' as RolloutAction,
   image: '',
-  max_unavailable_per_group: 1,
-  max_parallel: 5,
-  max_parallel_per_group: 2,
-  health_timeout_seconds: 300,
 })
-const probeForm = reactive<{ type: ProbeType; port: number; path: string }>({ type: '', port: 0, path: '/health' })
+const selectedStrategyID = ref('balanced')
+const healthStrategies = computed(() => templates.value.filter(item => item.kind === 'health'))
+const healthStrategyID = ref('')
+const selectedHealthStrategy = computed(() => healthStrategies.value.find(item => item.id === healthStrategyID.value))
+const probeForm = reactive<HealthStrategy>({ name: '', probe: { type: 'docker', port: 0, path: '/health' }, timeout: 300 })
 
 const typesByID = computed(() => {
   const result = new Map<string, ServiceType>()
@@ -65,19 +97,21 @@ const hostsByID = computed(() => {
   return result
 })
 const projectEnvironments = computed(() => environments.value.filter((item) => item.project_id === selectedProjectID.value))
-const projectTypes = computed(() => serviceTypes.value.filter((item) => item.project_id === selectedProjectID.value))
+const rolloutParameterFields = computed(() => typesByID.value.get(selectedTypeID.value)?.parameter_fields || [])
+const rolloutParameterValues = ref<Record<string, string>>({})
 const selectedSet = computed(() => new Set(selectedIDs.value))
 const selectedInstances = computed(() => instances.value.filter((item) => selectedSet.value.has(item.id)))
-const projectInstances = computed(() => {
-  const projectTypeIDs = new Set(projectTypes.value.map((item) => item.id))
-  return instances.value.filter((item) => projectTypeIDs.has(item.service_type_id))
+const projectInstances = computed(() => instances.value.filter(item => item.project_id === selectedProjectID.value))
+const projectTypes = computed(() => {
+  const ids = new Set(projectInstances.value.filter(item => !selectedEnvironmentID.value || item.environment_id === selectedEnvironmentID.value).map(item => item.service_type_id))
+  return serviceTypes.value.filter(item => ids.has(item.id))
 })
 const filteredInstances = computed(() => {
   const query = keyword.value.trim().toLocaleLowerCase()
   return projectInstances.value.filter((item) => {
     const type = typesByID.value.get(item.service_type_id)
     const host = hostsByID.value.get(item.host_id)
-    if (selectedEnvironmentID.value && type?.environment_id !== selectedEnvironmentID.value) return false
+    if (selectedEnvironmentID.value && item.environment_id !== selectedEnvironmentID.value) return false
     if (!selectedTypeID.value || item.service_type_id !== selectedTypeID.value) return false
     if (!query) return true
     const searchable = [item.name, item.image, item.note, item.rollout_group, type?.name, host?.name, host?.region, host?.zone]
@@ -101,7 +135,8 @@ const selectedServiceTypes = computed(() => {
   const ids = new Set(selectedInstances.value.map((item) => item.service_type_id))
   return [...ids].map((id) => typesByID.value.get(id)).filter((item): item is ServiceType => Boolean(item))
 })
-const missingProbeTypes = computed(() => selectedServiceTypes.value.filter((item) => !isProbeConfigured(item.readiness_probe)))
+const missingProbeTypes = computed(() => selectedHealthStrategy.value ? [] : selectedServiceTypes.value.filter((item) => !isProbeConfigured(item.readiness_probe)))
+const selectedStrategy = computed(() => rolloutStrategies.value.find((item) => item.id === selectedStrategyID.value) || builtInStrategies[1])
 
 watch(selectedProjectID, (id) => {
   sessionStorage.setItem('ops_rollout_project_id', id)
@@ -112,9 +147,8 @@ watch(selectedProjectID, (id) => {
 
 watch(selectedEnvironmentID, () => { selectedTypeID.value = '' })
 watch(selectedTypeID, () => { selectedIDs.value = [] })
-watch(() => rolloutForm.max_parallel, (value) => {
-  if (rolloutForm.max_parallel_per_group > value) rolloutForm.max_parallel_per_group = value
-})
+
+watch([selectedTypeID, createVisible], () => { rolloutParameterValues.value = {} })
 
 function rolloutGroup(item: ServiceInstance): { key: string; name: string } {
   const type = typesByID.value.get(item.service_type_id)
@@ -122,7 +156,7 @@ function rolloutGroup(item: ServiceInstance): { key: string; name: string } {
   const region = host?.region?.trim() || '未标注机房'
   const zone = host?.zone?.trim() || item.host_id
   const serviceGroup = item.rollout_group?.trim() || type?.name || '未知服务类型'
-  const key = JSON.stringify([type?.project_id || selectedProjectID.value, type?.environment_id || '', item.service_type_id, region, zone, serviceGroup])
+  const key = JSON.stringify([item.project_id, item.environment_id, item.service_type_id, region, zone, serviceGroup])
   const zoneName = host?.zone?.trim() || host?.name || item.host_id
   const typeName = type?.name || '未知服务类型'
   return { key, name: [region, zoneName, typeName, serviceGroup].join(' / ') }
@@ -131,6 +165,9 @@ function rolloutGroup(item: ServiceInstance): { key: string; name: string } {
 function isProbeConfigured(probe?: ServiceType['readiness_probe']) {
   if (!probe) return false
   if (probe.type === 'docker') return true
+  if (probe.type === 'tcp' || probe.type === 'http') {
+    if (!Number.isInteger(probe.port)) return false
+  }
   if (probe.type === 'tcp') return probe.port >= 1 && probe.port <= 65535
   if (probe.type === 'http') return probe.port >= 1 && probe.port <= 65535 && (!probe.path || probe.path.startsWith('/'))
   return false
@@ -194,41 +231,41 @@ function statusLabel(status: string) {
   return ({ running: '运行中', stopped: '已停止', error: '异常', unknown: '未知', not_deployed: '未部署', restarting: '重启中' } as Record<string, string>)[status] || status || '未知'
 }
 
-function openProbeEditor(type: ServiceType) {
-  editingProbeTypeID.value = type.id
-  probeForm.type = type.readiness_probe?.type || ''
-  probeForm.port = type.readiness_probe?.port || 0
-  probeForm.path = type.readiness_probe?.path || '/health'
-  probeDialogVisible.value = true
+async function loadTemplates() {
+  try {
+    templates.value = await rolloutApi.listTemplates()
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.error || '读取策略模板失败')
+  }
 }
 
-async function saveProbe() {
-  const type = typesByID.value.get(editingProbeTypeID.value)
-  if (!type) return
-  if ((probeForm.type === 'tcp' || probeForm.type === 'http') && (!Number.isInteger(probeForm.port) || probeForm.port < 1 || probeForm.port > 65535)) {
-    ElMessage.warning('端口必须在 1 到 65535 之间')
-    return
-  }
-  if (probeForm.type === 'http' && probeForm.path && !probeForm.path.startsWith('/')) {
-    ElMessage.warning('HTTP 路径必须以 / 开头')
-    return
-  }
-  probeSubmitting.value = true
+async function saveTemplate(template: Parameters<typeof rolloutApi.createTemplate>[0]) {
+  if (!canManageTemplates.value) return
+  if (templateSaving.value) return
+  templateSaving.value = true
   try {
-    const updated = await serviceApi.update(type.id, {
-      project_id: type.project_id,
-      environment_id: type.environment_id,
-      name: type.name,
-      readiness_probe: { type: probeForm.type, port: probeForm.port, path: probeForm.type === 'http' ? (probeForm.path || '/health') : '' },
-    })
-    serviceTypes.value = serviceTypes.value.map((item) => item.id === updated.id ? updated : item)
-    probeDialogVisible.value = false
-    ElMessage.success('就绪检查配置已保存')
+    const saved = await rolloutApi.createTemplate(template)
+    templates.value.push(saved)
+    if (saved.kind === 'release') {
+      selectedStrategyID.value = saved.id
+      releaseDialogVisible.value = false
+      releaseForm.name = ''
+    } else {
+      healthStrategyID.value = saved.id
+      probeDialogVisible.value = false
+    }
+    ElMessage.success('策略模板已保存')
   } catch (error: any) {
-    ElMessage.error(error?.response?.data?.error || '保存就绪检查配置失败')
+    ElMessage.error(error?.response?.data?.error || '保存策略模板失败')
   } finally {
-    probeSubmitting.value = false
+    templateSaving.value = false
   }
+}
+
+function saveProbe() {
+  const { type, port, path } = probeForm.probe
+  const probe = { type, port: type === 'docker' ? 0 : port, path: type === 'http' ? path.trim() || '/health' : '' }
+  void saveTemplate({ kind: 'health', name: probeForm.name, probe, timeout: probeForm.timeout })
 }
 
 async function editInstanceGroup(item: ServiceInstance) {
@@ -246,6 +283,8 @@ async function editInstanceGroup(item: ServiceInstance) {
   }
   try {
     await instanceApi.update(item.id, {
+      project_id: item.project_id,
+      environment_id: item.environment_id,
       service_type_id: item.service_type_id,
       host_id: item.host_id,
       name: item.name,
@@ -352,9 +391,14 @@ async function createRollout() {
     ElMessage.warning('请填写目标镜像')
     return
   }
+  const values = parameterOverrides(rolloutParameterFields.value, rolloutParameterValues.value)
+  const hasOverrides = Object.keys(values).length > 0
+  const strategy = selectedStrategy.value
+  const healthStrategy = selectedHealthStrategy.value
+  const healthTimeout = healthStrategy?.timeout ?? 300
   try {
     await ElMessageBox.confirm(
-      `将为项目 ${projects.value.find((item) => item.id === selectedProjectID.value)?.name || ''} 创建滚动${rolloutForm.action === 'restart' ? '重启' : `镜像更新到 ${image}`}任务，目标 ${selectedInstances.value.length} 个实例。每组最多不可用 ${rolloutForm.max_unavailable_per_group} 台，全局并发 ${rolloutForm.max_parallel} 台；就绪检查连续通过后推进，失败时自动暂停。`,
+      `将为项目 ${projects.value.find((item) => item.id === selectedProjectID.value)?.name || ''} 创建滚动${rolloutForm.action === 'restart' ? '重启' : `镜像更新到 ${image}`}任务，目标 ${selectedInstances.value.length} 个实例。${hasOverrides ? '填写的参数会应用到所有已选实例。' : ''}使用${strategy.name}：每组最多不可用 ${strategy.maxUnavailable} 台，全局并发 ${strategy.maxParallel} 台，每组并发 ${strategy.maxParallelPerGroup} 台，健康检测使用「${healthStrategy?.name || '服务类型默认检测'}」，超时 ${healthTimeout} 秒；就绪检查连续通过后推进，失败时自动暂停。`,
       '确认创建滚动发布',
       { type: 'warning', confirmButtonText: '创建任务' },
     )
@@ -367,10 +411,12 @@ async function createRollout() {
       instance_ids: selectedInstances.value.map((item) => item.id),
       action: rolloutForm.action,
       ...(image ? { image } : {}),
-      max_unavailable_per_group: rolloutForm.max_unavailable_per_group,
-      max_parallel: rolloutForm.max_parallel,
-      max_parallel_per_group: rolloutForm.max_parallel_per_group,
-      health_timeout_seconds: rolloutForm.health_timeout_seconds,
+      ...(hasOverrides ? { parameter_values: values } : {}),
+      max_unavailable_per_group: strategy.maxUnavailable,
+      max_parallel: strategy.maxParallel,
+      max_parallel_per_group: strategy.maxParallelPerGroup,
+      health_timeout_seconds: healthTimeout,
+      ...(healthStrategy ? { readiness_probe: healthStrategy.probe } : {}),
     })
     selectedIDs.value = []
     rolloutForm.image = ''
@@ -385,7 +431,7 @@ async function createRollout() {
 }
 
 onMounted(async () => {
-  await Promise.all([loadData(), refreshHistory()])
+  await Promise.all([loadData(), refreshHistory(), loadTemplates()])
   refreshTimer = setInterval(() => {
     if (rolloutHistory.value.some(job => ['queued', 'running'].includes(job.status))) void refreshHistory(true)
     if (detailVisible.value && rolloutDetail.value && ['queued', 'running'].includes(rolloutDetail.value.job.status)) void loadTask(rolloutDetail.value.job.id)
@@ -397,116 +443,152 @@ onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
 <template>
   <AppLayout>
     <div class="page-content-loading rollouts-page" v-loading="loading">
-      <div class="page-heading page-heading-modern page-heading-actions-only">
+      <header class="rollout-page-header">
+        <div><h1>滚动发布</h1><p>管理服务实例的镜像更新与滚动重启</p></div>
+        <div class="page-actions">
         <el-button :icon="Refresh" :loading="historyLoading" @click="refreshHistory()">刷新</el-button>
         <el-button v-if="canManage" type="primary" :icon="Plus" @click="createVisible = true">创建任务</el-button>
-      </div>
+        </div>
+      </header>
       <el-alert v-if="loadError" :title="loadError" type="error" show-icon :closable="false" />
       <section class="task-list">
         <header class="task-list-header"><div><h2>任务列表</h2><p>最近 100 个任务</p></div></header>
         <el-table :data="rolloutHistory" class="rollout-table" v-loading="historyLoading" empty-text="暂无滚动发布任务" @row-click="showTask">
-          <el-table-column label="任务类型" min-width="140"><template #default="{ row }">{{ row.action === 'restart' ? '滚动重启' : '滚动更新镜像' }}</template></el-table-column>
+          <el-table-column label="任务类型" min-width="140"><template #default="{ row }"><strong>{{ row.action === 'restart' ? '滚动重启' : '滚动更新镜像' }}</strong></template></el-table-column>
           <el-table-column label="项目" min-width="120"><template #default="{ row }">{{ projects.find(item => item.id === row.project_id)?.name || row.project_id }}</template></el-table-column>
           <el-table-column prop="image" label="目标镜像" min-width="200" show-overflow-tooltip />
           <el-table-column label="状态" width="110"><template #default="{ row }"><el-tag size="small" :type="row.status === 'succeeded' ? 'success' : row.status === 'failed' ? 'danger' : ['paused', 'partial'].includes(row.status) ? 'warning' : 'info'">{{ taskStatusLabel(row.status) }}</el-tag></template></el-table-column>
-          <el-table-column label="进度" width="110"><template #default="{ row }">{{ row.completed }} / {{ row.total }}</template></el-table-column>
+          <el-table-column label="进度" width="126">
+            <template #default="{ row }">
+              <span class="history-progress-label">{{ row.completed }} / {{ row.total }}</span>
+              <el-progress :percentage="row.total ? Math.round(row.completed / row.total * 100) : 0" :show-text="false" :stroke-width="4" />
+            </template>
+          </el-table-column>
           <el-table-column prop="operator" label="操作人" width="110" />
           <el-table-column label="创建时间" min-width="180"><template #default="{ row }">{{ new Date(row.created_at).toLocaleString() }}</template></el-table-column>
           <el-table-column label="操作" width="90"><template #default="{ row }"><el-button text type="primary" @click.stop="showTask(row)">详情</el-button></template></el-table-column>
         </el-table>
       </section>
-      <el-dialog v-model="createVisible" title="创建滚动发布任务" width="min(1400px, 94vw)" class="create-dialog" destroy-on-close>
+      <el-dialog v-model="createVisible" title="创建滚动发布任务" width="min(920px, 96vw)" class="create-dialog" destroy-on-close>
         <div class="create-dialog-content">
-      <section class="rollout-filter-bar">
-        <el-select v-model="selectedProjectID" placeholder="选择项目" aria-label="筛选项目" style="width: 190px">
-          <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
-        </el-select>
-        <el-select v-model="selectedEnvironmentID" clearable placeholder="全部环境" aria-label="筛选环境" style="width: 150px">
-          <el-option v-for="environment in projectEnvironments" :key="environment.id" :label="environment.name" :value="environment.id" />
-        </el-select>
-        <el-select v-model="selectedTypeID" clearable placeholder="请选择服务类型" aria-label="选择服务类型" style="width: 170px">
-          <el-option v-for="type in projectTypes.filter((item) => !selectedEnvironmentID || item.environment_id === selectedEnvironmentID)" :key="type.id" :label="type.name" :value="type.id" />
-        </el-select>
-        <el-input v-model="keyword" clearable placeholder="搜索实例、服组、主机或镜像" aria-label="搜索目标实例" style="max-width: 300px" />
-      </section>
-
-      <div class="rollouts-grid">
-        <section class="rollout-card rollout-targets">
-          <header class="rollout-card-header">
-            <div><h2>发布目标</h2><p>每个任务只能选择一种服务类型；已选择 {{ selectedInstances.length }} / 10000 台</p></div>
-            <div class="target-actions">
-              <el-button size="small" plain :disabled="!filteredInstances.length" @click="selectFiltered">全选筛选结果</el-button>
-              <el-button size="small" text :disabled="!selectedIDs.length" @click="clearSelection">清除选择</el-button>
-            </div>
-          </header>
-          <div class="target-group-list">
-            <article v-for="group in targetGroups" :key="group.key" class="target-group">
-              <header class="target-group-header">
-                <el-checkbox
-                  :model-value="groupSelection(group).allSelected"
-                  :indeterminate="groupSelection(group).indeterminate"
-                  :disabled="!canManage"
-                  @change="toggleGroup(group, Boolean($event))"
-                >{{ group.name }}</el-checkbox>
-                <span class="target-group-count">{{ groupSelection(group).selectedCount }}/{{ group.instances.length }} 已选</span>
+          <div class="rollouts-grid">
+            <section class="rollout-card rollout-targets">
+              <header class="rollout-card-header">
+                <div><h2>发布目标</h2><p>每次发布仅支持一种服务类型</p></div>
+                <span class="selection-count">已选 {{ selectedInstances.length }} 台</span>
               </header>
-              <div v-for="item in group.instances" :key="item.id" class="target-instance-row">
-                <input
-                  type="checkbox"
-                  :checked="selectedSet.has(item.id)"
-                  :disabled="!canManage"
-                  :aria-label="`选择实例 ${item.name}`"
-                  @change="toggleInstance(item.id, $event)"
-                />
-                <div class="target-instance-main"><b>{{ item.name }}</b><small>{{ typesByID.get(item.service_type_id)?.name || '未知服务类型' }} · {{ hostsByID.get(item.host_id)?.name || item.host_id }}</small></div>
-                <code>{{ item.image }}</code>
-                <el-tag size="small" :type="item.status === 'running' ? 'success' : item.status === 'error' ? 'danger' : 'info'">{{ statusLabel(item.status) }}</el-tag>
-                <el-button v-if="canManage" text size="small" @click="editInstanceGroup(item)">{{ item.rollout_group || '设置服组' }}</el-button>
-              </div>
-            </article>
-            <el-empty v-if="!targetGroups.length" :description="!selectedProjectID ? '请选择项目' : !selectedTypeID ? '请先选择服务类型' : '当前筛选条件下没有服务实例'" :image-size="66" />
-          </div>
-        </section>
-
-        <aside class="rollout-sidebar">
-          <section class="rollout-card rollout-strategy">
-            <header class="rollout-card-header"><div><h2>发布策略</h2><p>最大不可用数按每个分组独立计算</p></div></header>
-            <el-form label-position="top" class="strategy-form">
-              <el-form-item label="操作">
-                <el-select v-model="rolloutForm.action" style="width: 100%">
-                  <el-option label="滚动重启当前镜像" value="restart" />
-                  <el-option label="滚动更新镜像" value="update_image" />
+              <section class="rollout-filter-bar">
+                <el-select v-model="selectedProjectID" placeholder="选择项目" aria-label="筛选项目" style="width: 190px">
+                  <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
                 </el-select>
-              </el-form-item>
-              <el-form-item v-if="rolloutForm.action === 'update_image'" label="目标镜像">
-                <el-input v-model="rolloutForm.image" placeholder="例如 game:v1024-a1b2c3" />
-              </el-form-item>
-              <div class="strategy-grid">
-                <el-form-item label="每组最大不可用数"><el-input-number v-model="rolloutForm.max_unavailable_per_group" :min="1" :max="1000" /></el-form-item>
-                <el-form-item label="全局并发"><el-input-number v-model="rolloutForm.max_parallel" :min="1" :max="50" /></el-form-item>
-                <el-form-item label="每组并发"><el-input-number v-model="rolloutForm.max_parallel_per_group" :min="1" :max="rolloutForm.max_parallel" /></el-form-item>
-                <el-form-item label="健康检查超时（秒）"><el-input-number v-model="rolloutForm.health_timeout_seconds" :min="10" :max="1800" :step="30" /></el-form-item>
+                <el-select v-model="selectedEnvironmentID" clearable placeholder="全部环境" aria-label="筛选环境" style="width: 150px">
+                  <el-option v-for="environment in projectEnvironments" :key="environment.id" :label="environment.name" :value="environment.id" />
+                </el-select>
+                <el-select v-model="selectedTypeID" clearable placeholder="请选择服务类型" aria-label="选择服务类型" style="width: 170px">
+                  <el-option v-for="type in projectTypes" :key="type.id" :label="type.name" :value="type.id" />
+                </el-select>
+                <el-input v-model="keyword" clearable placeholder="搜索实例、服组、主机或镜像" aria-label="搜索目标实例" style="max-width: 300px" />
+              </section>
+
+                <div class="target-actions">
+                  <el-button size="small" plain :disabled="!filteredInstances.length" @click="selectFiltered">全选筛选结果</el-button>
+                  <el-button size="small" text :disabled="!selectedIDs.length" @click="clearSelection">清除选择</el-button>
+                </div>
+              <div class="target-group-list">
+                <article v-for="group in targetGroups" :key="group.key" class="target-group">
+                  <header class="target-group-header">
+                    <el-checkbox
+                      :model-value="groupSelection(group).allSelected"
+                      :indeterminate="groupSelection(group).indeterminate"
+                      :disabled="!canManage"
+                      @change="toggleGroup(group, Boolean($event))"
+                    >{{ group.name }}</el-checkbox>
+                    <span class="target-group-count">{{ groupSelection(group).selectedCount }}/{{ group.instances.length }} 已选</span>
+                  </header>
+                  <div v-for="item in group.instances" :key="item.id" class="target-instance-row">
+                    <input
+                      type="checkbox"
+                      :checked="selectedSet.has(item.id)"
+                      :disabled="!canManage"
+                      :aria-label="`选择实例 ${item.name}`"
+                      @change="toggleInstance(item.id, $event)"
+                    />
+                    <div class="target-instance-main"><b>{{ item.name }}</b><small>{{ typesByID.get(item.service_type_id)?.name || '未知服务类型' }} · {{ hostsByID.get(item.host_id)?.name || item.host_id }}</small></div>
+                    <code>{{ item.image }}</code>
+                    <el-tag size="small" :type="item.status === 'running' ? 'success' : item.status === 'error' ? 'danger' : 'info'">{{ statusLabel(item.status) }}</el-tag>
+                    <el-button v-if="canManage" text size="small" @click="editInstanceGroup(item)">{{ item.rollout_group || '设置服组' }}</el-button>
+                  </div>
+                </article>
+                <el-empty v-if="!targetGroups.length" :description="!selectedProjectID ? '请选择项目' : !selectedTypeID ? '请先选择服务类型' : '当前筛选条件下没有服务实例'" :image-size="66" />
               </div>
-            </el-form>
-            <div v-if="missingProbeTypes.length" class="probe-warning">以下服务类型尚未设置就绪检查：{{ missingProbeTypes.map((item) => item.name).join('、') }}</div>
-            <el-button class="create-rollout-button" type="primary" :loading="submitting" :disabled="!canManage || !selectedInstances.length || selectedInstances.length > 10000 || (rolloutForm.action === 'update_image' && !rolloutForm.image.trim()) || missingProbeTypes.length > 0" @click="createRollout">
-              创建滚动发布 · {{ selectedInstances.length }} 台
-            </el-button>
-          </section>
+            </section>
 
-          <section class="rollout-card probe-config-card">
-            <header class="rollout-card-header"><div><h2>就绪检查</h2><p>推进下一波前连续通过两次</p></div></header>
-            <div v-for="type in projectTypes" :key="type.id" class="probe-config-row">
-              <div><b>{{ type.name }}</b><small>{{ projectEnvironments.find((item) => item.id === type.environment_id)?.name || '环境未知' }} · {{ probeSummary(type.readiness_probe) }}</small></div>
-              <el-button v-if="canManage" size="small" text type="primary" @click="openProbeEditor(type)">配置</el-button>
-            </div>
-            <el-empty v-if="!projectTypes.length" description="当前项目暂无服务类型" :image-size="50" />
-          </section>
+            <section class="rollout-card">
+              <header class="rollout-card-header"><h2>发布配置</h2></header>
 
-        </aside>
-      </div>
+              <section class="settings-section">
+                <div class="settings-section-heading"><h3>发布策略</h3></div>
+                <div class="strategy-picker">
+                  <el-select v-model="selectedStrategyID" filterable aria-label="发布策略">
+                    <el-option v-for="strategy in rolloutStrategies" :key="strategy.id" :label="strategy.name" :value="strategy.id" />
+                  </el-select>
+                  <el-button v-if="canManageTemplates" :icon="Plus" @click="releaseDialogVisible = true">新建模板</el-button>
+                </div>
+                <p class="strategy-summary">每组最多不可用 {{ selectedStrategy.maxUnavailable }} 台 · 全局并发 {{ selectedStrategy.maxParallel }} 台 · 每组并发 {{ selectedStrategy.maxParallelPerGroup }} 台</p>
+              </section>
 
+              <section class="settings-section">
+                <div class="settings-section-heading"><div><h3>健康检测策略</h3><p>就绪检查连续通过两次后推进</p></div></div>
+                <div class="strategy-picker">
+                  <el-select v-model="healthStrategyID" filterable aria-label="健康检测策略">
+                    <el-option label="服务类型默认检测" value="" />
+                    <el-option v-for="strategy in healthStrategies" :key="strategy.id" :label="strategy.name" :value="strategy.id" />
+                  </el-select>
+                  <el-button v-if="canManageTemplates" :icon="Plus" @click="probeDialogVisible = true">新建模板</el-button>
+                </div>
+                <p v-if="selectedHealthStrategy" class="probe-dialog-hint">{{ probeSummary(selectedHealthStrategy.probe) }} · 超时 {{ selectedHealthStrategy.timeout }} 秒</p>
+                <p v-else-if="selectedTypeID" class="probe-dialog-hint">{{ probeSummary(typesByID.get(selectedTypeID)?.readiness_probe) }} · 超时 300 秒</p>
+              </section>
+
+              <section class="settings-section">
+                <div class="settings-section-heading"><h3>发布内容</h3></div>
+                <el-form label-position="top" class="rollout-content-form">
+                  <el-form-item label="操作">
+                    <el-select v-model="rolloutForm.action" style="width: 100%">
+                      <el-option label="滚动重启当前镜像" value="restart" />
+                      <el-option label="滚动更新镜像" value="update_image" />
+                    </el-select>
+                  </el-form-item>
+                  <el-form-item v-if="rolloutForm.action === 'update_image'" label="目标镜像">
+                    <el-input v-model="rolloutForm.image" placeholder="例如 game:v1024-a1b2c3" />
+                  </el-form-item>
+                </el-form>
+                <el-form v-if="rolloutParameterFields.length" class="rollout-parameter-form" label-width="90px">
+                  <p class="strategy-summary">填写后应用到所有已选实例，留空沿用各实例的值。</p>
+                  <ServiceParameterInputs
+                    :fields="rolloutParameterFields"
+                    :values="rolloutParameterValues"
+                    optional-overrides
+                    @change="(flag, value) => rolloutParameterValues[flag] = value"
+                  />
+                </el-form>
+              </section>
+
+              <div v-if="missingProbeTypes.length" class="probe-warning">请选择健康检测模板，或为以下服务类型设置默认检测：{{ missingProbeTypes.map((item) => item.name).join('、') }}</div>
+            </section>
+          </div>
         </div>
+        <template #footer>
+          <div class="create-footer">
+            <span>已选 <strong>{{ selectedInstances.length }}</strong> 台实例</span>
+            <div class="page-actions">
+              <el-button @click="createVisible = false">取消</el-button>
+              <el-button type="primary" :loading="submitting" :disabled="!canManage || !selectedInstances.length || selectedInstances.length > 10000 || (rolloutForm.action === 'update_image' && !rolloutForm.image.trim()) || missingProbeTypes.length > 0" @click="createRollout">
+                创建任务
+              </el-button>
+            </div>
+          </div>
+        </template>
       </el-dialog>
       <el-dialog v-model="detailVisible" title="任务详情" width="min(800px, 94vw)">
         <el-alert v-if="pollError" :title="pollError" type="error" :closable="false" />
@@ -535,25 +617,38 @@ onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
           </section>
 
       </el-dialog>
-      <el-dialog v-model="probeDialogVisible" append-to-body title="配置服务就绪检查" width="480px">
+      <el-dialog v-model="releaseDialogVisible" append-to-body title="新建发布策略" width="min(480px, 94vw)">
+        <el-form label-width="145px">
+          <el-form-item label="模板名称"><el-input v-model="releaseForm.name" maxlength="60" /></el-form-item>
+          <el-form-item label="每组最大不可用数"><el-input-number v-model="releaseForm.maxUnavailable" :min="1" :max="1000" /></el-form-item>
+          <el-form-item label="全局并发"><el-input-number v-model="releaseForm.maxParallel" :min="1" :max="50" /></el-form-item>
+          <el-form-item label="每组并发"><el-input-number v-model="releaseForm.maxParallelPerGroup" :min="1" :max="releaseForm.maxParallel" /></el-form-item>
+        </el-form>
+        <template #footer>
+          <el-button @click="releaseDialogVisible = false">取消</el-button>
+          <el-button type="primary" :loading="templateSaving" @click="saveTemplate({ kind: 'release', ...releaseForm })">保存模板</el-button>
+        </template>
+      </el-dialog>
+      <el-dialog v-model="probeDialogVisible" append-to-body title="健康检测模板" width="min(480px, 94vw)">
         <el-form label-width="115px">
+          <el-form-item label="模板名称"><el-input v-model="probeForm.name" maxlength="60" /></el-form-item>
           <el-form-item label="检查方式">
-            <el-select v-model="probeForm.type" style="width: 100%">
-              <el-option label="未配置" value="" />
+            <el-select v-model="probeForm.probe.type" style="width: 100%">
               <el-option label="Docker HEALTHCHECK" value="docker" />
               <el-option label="TCP 端口连通" value="tcp" />
               <el-option label="HTTP 健康接口" value="http" />
             </el-select>
           </el-form-item>
-          <el-form-item v-if="probeForm.type === 'tcp' || probeForm.type === 'http'" label="主机发布端口">
-            <el-input-number v-model="probeForm.port" :min="1" :max="65535" />
+          <el-form-item v-if="probeForm.probe.type === 'tcp' || probeForm.probe.type === 'http'" label="主机发布端口">
+            <el-input-number v-model="probeForm.probe.port" :min="1" :max="65535" />
           </el-form-item>
-          <el-form-item v-if="probeForm.type === 'http'" label="HTTP 路径">
-            <el-input v-model="probeForm.path" placeholder="/health" />
+          <el-form-item v-if="probeForm.probe.type === 'http'" label="HTTP 路径">
+            <el-input v-model="probeForm.probe.path" placeholder="/health" />
           </el-form-item>
+          <el-form-item label="超时（秒）"><el-input-number v-model="probeForm.timeout" :min="10" :max="1800" /></el-form-item>
         </el-form>
         <p class="probe-dialog-hint">TCP/HTTP 检查由 Ops 服务访问主机配置的内网 IP 和发布端口。</p>
-        <template #footer><el-button @click="probeDialogVisible = false">取消</el-button><el-button type="primary" :loading="probeSubmitting" @click="saveProbe">保存配置</el-button></template>
+        <template #footer><el-button @click="probeDialogVisible = false">取消</el-button><el-button type="primary" :loading="templateSaving" @click="saveProbe">保存模板</el-button></template>
       </el-dialog>
     </div>
   </AppLayout>
@@ -565,18 +660,17 @@ onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
 .task-list-header { display: flex; align-items: center; padding: 18px 20px; border-bottom: 1px solid var(--ops-border); }
 .task-list-header h2 { margin: 0; color: var(--ops-text); font-size: 15px; font-weight: 600; }
 .task-list-header p { margin: 4px 0 0; color: var(--ops-text-secondary); font-size: 12px; }
-.rollout-table { --el-table-header-bg-color: #fff; --el-table-row-hover-bg-color: #f8faff; }
+.rollout-table { --el-table-header-bg-color: #f7f9fc; --el-table-row-hover-bg-color: #f8faff; }
 .rollout-table :deep(th.el-table__cell) { padding: 13px 0; color: var(--ops-text-secondary); font-size: 12px; font-weight: 400; }
 .rollout-table :deep(td.el-table__cell) { padding: 17px 0; }
-.rollout-filter-bar { display: flex; flex-wrap: wrap; gap: 10px; margin: 18px 0; padding: 14px; border: 1px solid var(--ops-border); border-radius: 10px; background: #fff; }
-.rollouts-grid { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(360px, .85fr); align-items: start; gap: 16px; }
-.rollout-sidebar { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.rollout-filter-bar { display: flex; flex-wrap: wrap; gap: 10px; padding: 14px 20px 6px; }
+.rollouts-grid { display: flex; flex-direction: column; gap: 16px; }
 .rollout-card { min-width: 0; overflow: hidden; border: 1px solid var(--ops-border); border-radius: 10px; background: #fff; box-shadow: 0 2px 8px #1d2e4608; }
 .rollout-card-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 15px 17px; border-bottom: 1px solid #edf0f4; }
 .rollout-card-header h2 { margin: 0; color: var(--ops-text); font-size: 14px; font-weight: 650; }
 .rollout-card-header p { margin: 4px 0 0; color: var(--ops-text-secondary); font-size: 11px; }
-.target-actions { display: flex; align-items: center; flex-shrink: 0; }
-.target-group-list { max-height: calc(100vh - 300px); min-height: 260px; overflow: auto; padding: 4px 14px 14px; }
+.target-actions { display: flex; align-items: center; padding: 4px 20px; }
+.target-group-list { max-height: 32vh; min-height: 90px; overflow: auto; padding: 4px 14px 14px; }
 .target-group { margin-top: 10px; border: 1px solid #e9edf3; border-radius: 8px; overflow: hidden; }
 .target-group-header { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: #f8faff; }
 .target-group-header .el-checkbox { flex: 1; min-width: 0; }
@@ -588,22 +682,30 @@ onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
 .target-instance-main b { overflow: hidden; color: var(--ops-text); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .target-instance-main small, .target-instance-row code { overflow: hidden; color: var(--ops-text-secondary); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .target-instance-row code { font-family: Consolas, monospace; }
-.rollout-strategy { padding-bottom: 14px; }
-.strategy-form { padding: 14px 16px 0; }
-.strategy-form :deep(.el-form-item) { margin-bottom: 13px; }
-.strategy-form :deep(.el-form-item__label) { padding-bottom: 4px; color: var(--ops-text-secondary); font-size: 11px; }
-.strategy-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; }
-.strategy-grid .el-input-number { width: 100%; }
+.settings-section:last-child { border-bottom: 0; }
+.settings-section { padding: 18px 20px; border-bottom: 1px solid #edf0f4; }
+.settings-section-heading { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 13px; }
+.settings-section-heading h3 { margin: 0; color: var(--ops-text); font-size: 13px; font-weight: 600; }
+.settings-section-heading p { margin: 4px 0 0; color: var(--ops-text-secondary); font-size: 11px; }
+.rollout-parameter-form { margin-top: 14px; padding-top: 6px; border-top: 1px solid var(--ops-border); }
+.rollout-parameter-form .strategy-summary { margin-bottom: 10px; }
+.rollout-parameter-form :deep(.el-form-item:last-child) { margin-bottom: 0; }
+.rollout-content-form { display: grid; gap: 12px; }
+.rollout-content-form :deep(.el-form-item) { margin-bottom: 0; }
+.rollout-content-form :deep(.el-form-item__label) { padding-bottom: 5px; color: var(--ops-text-secondary); font-size: 11px; }
 .probe-warning { margin: 0 16px 12px; color: var(--ops-warning); font-size: 11px; line-height: 1.5; }
-.create-rollout-button { width: calc(100% - 32px); margin: 0 16px; }
-.probe-config-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px; border-bottom: 1px solid #f0f2f5; }
-.probe-config-row:last-child { border-bottom: 0; }
-.probe-config-row > div { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
-.probe-config-row b { color: var(--ops-text); font-size: 12px; }
-.probe-config-row small { color: var(--ops-text-secondary); font-size: 10px; }
+.history-progress-label { display: block; margin-bottom: 5px; font-size: 12px; font-variant-numeric: tabular-nums; }
 .task-list :deep(.el-table__row) { cursor: pointer; }
-.create-dialog-content { max-height: 75vh; overflow: auto; }
-.create-dialog-content .rollout-filter-bar { margin-top: 0; }
+.create-dialog-content { background: #f7f9fc; padding: 4px; }
+.create-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--ops-border); padding-top: 14px; color: var(--ops-text-secondary); font-size: 13px; }
+.create-footer strong { color: var(--ops-text); }
+.rollout-page-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; margin-bottom: 22px; }
+.rollout-page-header h1 { margin: 0; font-size: 25px; color: var(--ops-text); }
+.rollout-page-header p { margin: 5px 0 0; font-size: 13px; color: var(--ops-text-secondary); }
+.page-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.page-actions .el-button + .el-button { margin-left: 0; }
+.selection-count { flex-shrink: 0; padding: 5px 10px; border-radius: 6px; background: var(--ops-primary-light); color: var(--ops-primary); font-size: 12px; }
+.strategy-summary { margin: 8px 0 0; font-size: 12px; color: var(--ops-text-secondary); }
 .rollout-task-card { padding-bottom: 12px; }
 .rollout-task-card .rollout-card-header { align-items: flex-start; }
 .rollout-task-card .rollout-card-header p { max-width: 220px; }
@@ -625,13 +727,15 @@ onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
 .task-audit summary { cursor: pointer; color: var(--ops-primary); font-weight: 600; }
 .task-audit > div { display: grid; grid-template-columns: 115px 78px minmax(0, 1fr); gap: 6px; padding-top: 7px; color: var(--ops-text-secondary); }
 .task-audit time { font-variant-numeric: tabular-nums; }
+.strategy-picker { display: flex; gap: 10px; margin-bottom: 8px; }
+.strategy-picker .el-select { flex: 1; min-width: 0; max-width: 360px; }
 .probe-dialog-hint { margin: 0; color: var(--ops-text-secondary); font-size: 11px; }
-@media (max-width: 1050px) { .rollouts-grid { grid-template-columns: 1fr; } .target-group-list { max-height: 55vh; } }
 @media (max-width: 700px) {
-  .rollout-filter-bar > * { width: 100%; max-width: none !important; }
+  .rollout-filter-bar > * { width: 100% !important; max-width: none !important; }
   .target-instance-row { grid-template-columns: 18px minmax(100px, 1fr) auto; }
   .target-instance-row code { display: none; }
   .target-instance-row > .el-button { grid-column: 2 / -1; justify-self: start; }
   .target-actions { flex-wrap: wrap; justify-content: flex-end; }
+  .settings-section { padding-right: 14px; padding-left: 14px; }
 }
 </style>

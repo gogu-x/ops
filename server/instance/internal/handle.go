@@ -45,12 +45,20 @@ func (is *InstanceService) handleEnrich(ctx tree.Context, request model.EnrichRe
 }
 
 func (is *InstanceService) handleDeploy(ctx tree.Context, request model.DeployRequest) {
-	result, err := is.deployWithMetadata(request.ID, request.Operator, "deploy")
+	operation := "deploy"
+	switch request.Operation {
+	case "start", "restart":
+		operation = request.Operation
+	}
+	result, err := is.deployWithParameters(request.ID, operation != "restart", request.Operator, operation, request.Params)
+	if operation == "restart" {
+		is.recordRestartEvent(request.ID, err)
+	}
 	ctx.Response(result, err)
 }
 
 func (is *InstanceService) handleUpdateImage(ctx tree.Context, request model.UpdateImageRequest) {
-	result, err := is.updateImageWithMetadata(request.ID, request.Image, request.Operator, "update_image")
+	result, err := is.updateImageWithParameters(request.ID, request.Image, request.Operator, "update_image", request.Params)
 	ctx.Response(result, err)
 }
 

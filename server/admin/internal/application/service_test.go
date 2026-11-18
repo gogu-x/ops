@@ -8,7 +8,7 @@ import (
 
 	"github.com/gogu-x/ops/admin/internal/environment"
 	"github.com/gogu-x/ops/admin/internal/project"
-	"github.com/gogu-x/ops/admin/internal/service"
+	"github.com/gogu-x/ops/admin/internal/servicetype"
 	"github.com/gogu-x/ops/instance"
 	"github.com/gogu-x/ops/model"
 )
@@ -19,33 +19,18 @@ func (f requestFunc) Request(actor string, message interface{}) (interface{}, er
 	return f(actor, message)
 }
 
-func newTestService(gateway Gateway) (*Service, project.Repository, environment.Repository, service.Repository, InstanceRepository) {
+func newTestService(gateway Gateway) (*Service, project.Repository, environment.Repository, servicetype.Repository, instance.Repository) {
 	projects := project.NewMemoryRepository()
 	environments := environment.NewMemoryRepository()
-	serviceTypes := service.NewMemoryRepository()
+	serviceTypes := servicetype.NewMemoryRepository()
 	instances := instance.NewMemoryRepository()
 	return New(gateway, projects, environments, serviceTypes, instances), projects, environments, serviceTypes, instances
 }
 
-func TestServiceTypeCRUDUsesRepositoriesAndValidatesHost(t *testing.T) {
+func TestServiceTypeCRUDUsesRepository(t *testing.T) {
 	ctx := context.Background()
-	gateway := requestFunc(func(actor string, message interface{}) (interface{}, error) {
-		if actor != "ops-host" {
-			return nil, errors.New("unexpected actor: " + actor)
-		}
-		return model.HostListResponse{Hosts: []model.Host{{ID: "host-1"}}}, nil
-	})
-	app, projects, environments, _, _ := newTestService(gateway)
-	projectItem := project.NewProject("project", "", "")
-	if err := projects.Create(ctx, projectItem); err != nil {
-		t.Fatal(err)
-	}
-	envItem := environment.NewEnvironment(projectItem.ID, "beta")
-	if err := environments.Create(ctx, envItem); err != nil {
-		t.Fatal(err)
-	}
-
-	created, err := app.CreateServiceType(ctx, model.ServiceType{ProjectID: projectItem.ID, EnvironmentID: envItem.ID, Name: "game"})
+	app, _, _, _, _ := newTestService(nil)
+	created, err := app.CreateServiceType(ctx, model.ServiceType{Name: "game"})
 	if err != nil {
 		t.Fatalf("CreateServiceType: %v", err)
 	}
@@ -55,18 +40,18 @@ func TestServiceTypeCRUDUsesRepositoriesAndValidatesHost(t *testing.T) {
 	}
 }
 
-func TestCreateServiceTypeStopsWhenProjectDoesNotExist(t *testing.T) {
+func TestCreateInstanceStopsWhenProjectDoesNotExist(t *testing.T) {
 	app, _, _, _, _ := newTestService(requestFunc(func(string, interface{}) (interface{}, error) {
 		t.Fatal("host actor must not be called when project is missing")
 		return nil, nil
 	}))
-	_, err := app.CreateServiceType(context.Background(), model.ServiceType{ProjectID: "missing", EnvironmentID: "env-1", Name: "game"})
+	_, err := app.CreateInstance(context.Background(), model.ServiceInstance{ProjectID: "missing", EnvironmentID: "env-1", ServiceTypeID: "game", HostID: "host-1", Name: "game-1", Image: "game:v1"})
 	if err == nil || !strings.Contains(err.Error(), "project not found") {
 		t.Fatalf("expected project-not-found error, got %v", err)
 	}
 }
 
-func TestCreateServiceTypeStopsWhenEnvironmentDoesNotExist(t *testing.T) {
+func TestCreateInstanceStopsWhenEnvironmentDoesNotExist(t *testing.T) {
 	ctx := context.Background()
 	app, projects, _, _, _ := newTestService(requestFunc(func(string, interface{}) (interface{}, error) {
 		t.Fatal("host actor must not be called when environment is missing")
@@ -76,7 +61,7 @@ func TestCreateServiceTypeStopsWhenEnvironmentDoesNotExist(t *testing.T) {
 	if err := projects.Create(ctx, projectItem); err != nil {
 		t.Fatal(err)
 	}
-	_, err := app.CreateServiceType(ctx, model.ServiceType{ProjectID: projectItem.ID, EnvironmentID: "missing", Name: "game"})
+	_, err := app.CreateInstance(ctx, model.ServiceInstance{ProjectID: projectItem.ID, EnvironmentID: "missing", ServiceTypeID: "game", HostID: "host-1", Name: "game-1", Image: "game:v1"})
 	if err == nil || !strings.Contains(err.Error(), "environment not found") {
 		t.Fatalf("expected environment-not-found error, got %v", err)
 	}
@@ -102,18 +87,18 @@ func TestInstanceCRUDUsesRepository(t *testing.T) {
 	if err := environments.Create(ctx, envItem); err != nil {
 		t.Fatal(err)
 	}
-	typeItem := service.NewServiceType(projectItem.ID, envItem.ID, "game")
+	typeItem := servicetype.NewServiceType("game")
 	if err := serviceTypes.Create(ctx, typeItem); err != nil {
 		t.Fatal(err)
 	}
-	created, err := app.CreateInstance(ctx, model.ServiceInstance{ServiceTypeID: typeItem.ID, HostID: "host-1", Name: "game-1", Image: "game:v1"})
+	created, err := app.CreateInstance(ctx, model.ServiceInstance{ProjectID: projectItem.ID, EnvironmentID: envItem.ID, ServiceTypeID: typeItem.ID, HostID: "host-1", Name: "game-1", Image: "game:v1"})
 	if err != nil {
 		t.Fatalf("CreateInstance: %v", err)
 	}
 	if created.ID == "" {
 		t.Fatal("created instance has no ID")
 	}
-	if _, err := app.CreateInstance(ctx, model.ServiceInstance{ServiceTypeID: typeItem.ID, HostID: "host-2", Name: "game-2", Image: "game:v1"}); !errors.Is(err, model.ErrHostProjectConflict) {
+	if _, err := app.CreateInstance(ctx, model.ServiceInstance{ProjectID: projectItem.ID, EnvironmentID: envItem.ID, ServiceTypeID: typeItem.ID, HostID: "host-2", Name: "game-2", Image: "game:v1"}); !errors.Is(err, model.ErrHostProjectConflict) {
 		t.Fatalf("expected host from another project to be rejected, got %v", err)
 	}
 }
@@ -142,11 +127,12 @@ func TestSetProjectHostsAllowsSharingHostUsedByAnotherProject(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	typeItem := service.NewServiceType("project-1", "environment-1", "game")
+	typeItem := servicetype.NewServiceType("game")
 	if err := serviceTypes.Create(ctx, typeItem); err != nil {
 		t.Fatal(err)
 	}
 	usedInstance := model.NewServiceInstance(typeItem.ID, "host-1", "game-1", "game:v1", "", "", "", "", nil)
+	usedInstance.ProjectID, usedInstance.EnvironmentID = "project-1", "environment-1"
 	if err := instances.Create(ctx, usedInstance); err != nil {
 		t.Fatal(err)
 	}

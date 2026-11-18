@@ -69,6 +69,8 @@ export interface RolloutDetail {
 }
 
 export interface CreateRolloutRequest {
+  parameter_values?: Record<string, string>
+  readiness_probe?: RolloutItem['readiness_probe']
   instance_ids: string[]
   action: RolloutAction
   image?: string
@@ -78,6 +80,22 @@ export interface CreateRolloutRequest {
   health_timeout_seconds: number
 }
 
+export interface ReleaseStrategy {
+  name: string
+  maxUnavailable: number
+  maxParallel: number
+  maxParallelPerGroup: number
+}
+
+export interface HealthStrategy {
+  name: string
+  probe: RolloutItem['readiness_probe']
+  timeout: number
+}
+
+type StrategyInput = ({ kind: 'release' } & ReleaseStrategy) | ({ kind: 'health' } & HealthStrategy)
+export type StrategyTemplate = StrategyInput & { id: string }
+
 interface ApiResponse<T> {
   ok: boolean
   data: T
@@ -85,6 +103,16 @@ interface ApiResponse<T> {
 }
 
 export const rolloutApi = {
+  async listTemplates(): Promise<StrategyTemplate[]> {
+    const response = await api.get<ApiResponse<StrategyTemplate[]>>('/rollout-templates')
+    return response.data.data
+  },
+
+  async createTemplate(template: StrategyInput): Promise<StrategyTemplate> {
+    const response = await api.post<ApiResponse<StrategyTemplate>>('/rollout-templates', template)
+    return response.data.data
+  },
+
   async create(request: CreateRolloutRequest): Promise<RolloutDetail> {
     const response = await api.post<ApiResponse<RolloutDetail>>('/rollouts', request, { timeout: 180000 })
     return response.data.data

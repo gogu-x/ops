@@ -12,7 +12,8 @@ import (
 
 	"github.com/gogu-x/ops/admin/internal/environment"
 	"github.com/gogu-x/ops/admin/internal/project"
-	"github.com/gogu-x/ops/admin/internal/service"
+	"github.com/gogu-x/ops/admin/internal/servicetype"
+	"github.com/gogu-x/ops/instance"
 	"github.com/gogu-x/ops/model"
 )
 
@@ -27,24 +28,11 @@ type Service struct {
 	gateway      Gateway
 	projects     project.Repository
 	environments environment.Repository
-	serviceTypes service.Repository
-	instances    InstanceRepository
+	serviceTypes servicetype.Repository
+	instances    instance.Repository
 }
 
-// InstanceRepository is the subset of the service-instance repository
-// needed by the application layer. Declared locally (rather than importing
-// instance/internal) because Go's internal-package visibility rule forbids
-// importing another module-relative internal package from a sibling package
-// tree.
-type InstanceRepository interface {
-	List(ctx context.Context) ([]model.ServiceInstance, error)
-	Get(ctx context.Context, id string) (model.ServiceInstance, error)
-	Create(ctx context.Context, item model.ServiceInstance) error
-	Update(ctx context.Context, item model.ServiceInstance) error
-	Delete(ctx context.Context, id string) error
-}
-
-func New(gateway Gateway, projects project.Repository, environments environment.Repository, serviceTypes service.Repository, instances InstanceRepository) *Service {
+func New(gateway Gateway, projects project.Repository, environments environment.Repository, serviceTypes servicetype.Repository, instances instance.Repository) *Service {
 	return &Service{gateway: gateway, projects: projects, environments: environments, serviceTypes: serviceTypes, instances: instances}
 }
 
@@ -170,16 +158,8 @@ func (s *Service) SetProjectHosts(ctx context.Context, projectID string, hostIDs
 		if err != nil {
 			return err
 		}
-		serviceTypes, err := s.serviceTypes.List(ctx)
-		if err != nil {
-			return err
-		}
-		projectByType := make(map[string]string, len(serviceTypes))
-		for _, item := range serviceTypes {
-			projectByType[item.ID] = item.ProjectID
-		}
 		for _, instance := range instances {
-			if _, isRemoved := removed[instance.HostID]; isRemoved && projectByType[instance.ServiceTypeID] == projectID {
+			if _, isRemoved := removed[instance.HostID]; isRemoved && instance.ProjectID == projectID {
 				return model.ErrHostInUse
 			}
 		}
@@ -254,6 +234,15 @@ func (s *Service) DeleteProject(ctx context.Context, id string) error {
 			return model.ErrProjectHasBoundHosts
 		}
 	}
+	instances, err := s.instances.List(ctx)
+	if err != nil {
+		return err
+	}
+	for _, item := range instances {
+		if item.ProjectID == id {
+			return errors.New("项目仍有服务实例，无法删除")
+		}
+	}
 	return s.projects.Delete(ctx, id)
 }
 
@@ -286,6 +275,11 @@ func (s *Service) UpdateEnvironment(ctx context.Context, item model.Environment)
 	if err != nil {
 		return model.Environment{}, err
 	}
+	if item.ProjectID != existing.ProjectID {
+		if err := s.ensureEnvironmentUnused(ctx, item.ID); err != nil {
+			return model.Environment{}, err
+		}
+	}
 	item.CreatedAt = existing.CreatedAt
 	item.UpdatedAt = time.Now().UTC()
 	if err := s.environments.Update(ctx, item); err != nil {
@@ -295,7 +289,23 @@ func (s *Service) UpdateEnvironment(ctx context.Context, item model.Environment)
 }
 
 func (s *Service) DeleteEnvironment(ctx context.Context, id string) error {
+	if err := s.ensureEnvironmentUnused(ctx, id); err != nil {
+		return err
+	}
 	return s.environments.Delete(ctx, id)
+}
+
+func (s *Service) ensureEnvironmentUnused(ctx context.Context, id string) error {
+	instances, err := s.instances.List(ctx)
+	if err != nil {
+		return err
+	}
+	for _, item := range instances {
+		if item.EnvironmentID == id {
+			return errors.New("环境仍有服务实例，无法删除或更换所属项目")
+		}
+	}
+	return nil
 }
 
 func (s *Service) validateEnvironmentReferences(ctx context.Context, item model.Environment) error {
@@ -317,14 +327,12 @@ func (s *Service) ListServiceTypes(ctx context.Context) ([]model.ServiceType, er
 }
 
 func (s *Service) CreateServiceType(ctx context.Context, item model.ServiceType) (model.ServiceType, error) {
-	if err := s.validateServiceTypeReferences(ctx, item); err != nil {
+	if err := servicetype.Validate(item); err != nil {
 		return model.ServiceType{}, err
 	}
-	if err := service.Validate(item); err != nil {
-		return model.ServiceType{}, err
-	}
-	created := service.NewServiceType(item.ProjectID, item.EnvironmentID, item.Name)
+	created := servicetype.NewServiceType(item.Name)
 	created.ReadinessProbe = normalizeReadinessProbe(item.ReadinessProbe)
+	created.ParameterFields = item.ParameterFields
 	if err := s.serviceTypes.Create(ctx, created); err != nil {
 		return model.ServiceType{}, err
 	}
@@ -332,26 +340,15 @@ func (s *Service) CreateServiceType(ctx context.Context, item model.ServiceType)
 }
 
 func (s *Service) UpdateServiceType(ctx context.Context, item model.ServiceType) (model.ServiceType, error) {
-	if err := s.validateServiceTypeReferences(ctx, item); err != nil {
-		return model.ServiceType{}, err
-	}
-	if err := service.Validate(item); err != nil {
+	if err := servicetype.Validate(item); err != nil {
 		return model.ServiceType{}, err
 	}
 	existing, err := s.serviceTypes.Get(ctx, item.ID)
 	if err != nil {
 		return model.ServiceType{}, err
 	}
-	if existing.ProjectID != item.ProjectID {
-		instances, err := s.instances.List(ctx)
-		if err != nil {
-			return model.ServiceType{}, err
-		}
-		for _, instance := range instances {
-			if instance.ServiceTypeID == item.ID {
-				return model.ServiceType{}, errors.New("cannot move a service type to another project while it has instances")
-			}
-		}
+	if item.ParameterFields == nil {
+		item.ParameterFields = existing.ParameterFields
 	}
 	item.CreatedAt = existing.CreatedAt
 	item.ReadinessProbe = normalizeReadinessProbe(item.ReadinessProbe)
@@ -363,10 +360,19 @@ func (s *Service) UpdateServiceType(ctx context.Context, item model.ServiceType)
 }
 
 func (s *Service) DeleteServiceType(ctx context.Context, id string) error {
+	instances, err := s.instances.List(ctx)
+	if err != nil {
+		return err
+	}
+	for _, instance := range instances {
+		if instance.ServiceTypeID == id {
+			return errors.New("服务类型仍有实例使用，无法删除")
+		}
+	}
 	return s.serviceTypes.Delete(ctx, id)
 }
 
-func (s *Service) validateServiceTypeReferences(ctx context.Context, item model.ServiceType) error {
+func (s *Service) validateInstanceScope(ctx context.Context, item model.ServiceInstance) error {
 	if strings.TrimSpace(item.ProjectID) == "" {
 		return errors.New("project_id is required")
 	}
@@ -429,14 +435,21 @@ func (s *Service) CreateInstance(ctx context.Context, item model.ServiceInstance
 	if err := model.ValidateServiceInstance(item); err != nil {
 		return model.ServiceInstance{}, err
 	}
+	if err := s.validateInstanceScope(ctx, item); err != nil {
+		return model.ServiceInstance{}, err
+	}
 	serviceType, err := s.getServiceType(ctx, item.ServiceTypeID)
 	if err != nil {
 		return model.ServiceInstance{}, err
 	}
-	if err := s.ensureHostInProject(item.HostID, serviceType.ProjectID); err != nil {
+	if _, err := servicetype.MergeParameterValues(serviceType.ParameterFields, item.Params, nil); err != nil {
+		return model.ServiceInstance{}, err
+	}
+	if err := s.ensureHostInProject(item.HostID, item.ProjectID); err != nil {
 		return model.ServiceInstance{}, err
 	}
 	created := model.NewServiceInstance(item.ServiceTypeID, item.HostID, item.Name, item.Image, item.Note, item.EnvText, item.Network, item.PortMapping, item.Params)
+	created.ProjectID, created.EnvironmentID = item.ProjectID, item.EnvironmentID
 	created.RolloutGroup = strings.TrimSpace(item.RolloutGroup)
 	created.RestartPolicy = model.NormalizeRestartPolicy(item.RestartPolicy)
 	if err := s.instances.Create(ctx, created); err != nil {
@@ -449,11 +462,13 @@ func (s *Service) UpdateInstance(ctx context.Context, item model.ServiceInstance
 	if err := model.ValidateServiceInstance(item); err != nil {
 		return model.ServiceInstance{}, err
 	}
-	serviceType, err := s.getServiceType(ctx, item.ServiceTypeID)
-	if err != nil {
+	if err := s.validateInstanceScope(ctx, item); err != nil {
 		return model.ServiceInstance{}, err
 	}
-	if err := s.ensureHostInProject(item.HostID, serviceType.ProjectID); err != nil {
+	if _, err := s.getServiceType(ctx, item.ServiceTypeID); err != nil {
+		return model.ServiceInstance{}, err
+	}
+	if err := s.ensureHostInProject(item.HostID, item.ProjectID); err != nil {
 		return model.ServiceInstance{}, err
 	}
 	existing, err := s.instances.Get(ctx, item.ID)
@@ -523,6 +538,77 @@ func (s *Service) instanceResult(message interface{}) (model.ServiceInstance, er
 	return result, nil
 }
 
+func (s *Service) parameterChanges(ctx context.Context, id string, values map[string]string) (*[]model.ServiceParam, error) {
+	stored, err := s.instances.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.ensureHostInProject(stored.HostID, stored.ProjectID); err != nil {
+		return nil, err
+	}
+	serviceType, err := s.getServiceType(ctx, stored.ServiceTypeID)
+	if err != nil {
+		return nil, err
+	}
+	params, err := servicetype.MergeParameterValues(serviceType.ParameterFields, stored.Params, values)
+	if err != nil || servicetype.ParameterValuesMatch(stored.Params, values) {
+		return nil, err
+	}
+	return &params, nil
+}
+
+func (s *Service) DeployInstanceWithParameters(ctx context.Context, id, operator string, values map[string]string) (model.ServiceInstance, error) {
+	if values == nil {
+		return s.DeployInstance(ctx, id, operator)
+	}
+	params, err := s.parameterChanges(ctx, id, values)
+	if err != nil {
+		return model.ServiceInstance{}, err
+	}
+	return s.instanceResultTimeout(model.DeployRequest{ID: id, Operator: operator, Params: params}, 3*time.Minute)
+}
+
+func (s *Service) StartInstanceWithParameters(ctx context.Context, id, operator string, values map[string]string) error {
+	if values == nil {
+		return s.ContainerAction(id, "start")
+	}
+	params, err := s.parameterChanges(ctx, id, values)
+	if err != nil {
+		return err
+	}
+	if params == nil {
+		return s.ContainerAction(id, "start")
+	}
+	_, err = s.instanceResultTimeout(model.DeployRequest{ID: id, Operator: operator, Params: params, Operation: "start"}, 3*time.Minute)
+	return err
+}
+
+func (s *Service) RestartInstanceWithParameters(ctx context.Context, id, operator string, values map[string]string) error {
+	if len(values) == 0 {
+		return s.ContainerAction(id, "restart")
+	}
+	params, err := s.parameterChanges(ctx, id, values)
+	if err != nil {
+		return err
+	}
+	if params == nil {
+		return s.ContainerAction(id, "restart")
+	}
+	_, err = s.instanceResultTimeout(model.DeployRequest{ID: id, Operator: operator, Params: params, Operation: "restart"}, 3*time.Minute)
+	return err
+}
+
+func (s *Service) UpdateInstanceImageWithParameters(ctx context.Context, id, image, operator string, values map[string]string) (model.ServiceInstance, error) {
+	if values == nil {
+		return s.UpdateInstanceImage(ctx, id, image, operator)
+	}
+	params, err := s.parameterChanges(ctx, id, values)
+	if err != nil {
+		return model.ServiceInstance{}, err
+	}
+	return s.instanceResultTimeout(model.UpdateImageRequest{ID: id, Image: image, Operator: operator, Params: params}, 9*time.Minute)
+}
+
 func (s *Service) DeployInstance(ctx context.Context, id string, operator ...string) (model.ServiceInstance, error) {
 	if err := s.ensureStoredInstanceHost(ctx, id); err != nil {
 		return model.ServiceInstance{}, err
@@ -586,11 +672,7 @@ func (s *Service) ensureStoredInstanceHost(ctx context.Context, id string) error
 	if err != nil {
 		return err
 	}
-	serviceType, err := s.getServiceType(ctx, item.ServiceTypeID)
-	if err != nil {
-		return err
-	}
-	return s.ensureHostInProject(item.HostID, serviceType.ProjectID)
+	return s.ensureHostInProject(item.HostID, item.ProjectID)
 }
 
 func (s *Service) InstanceStatus(id string) (model.ServiceInstance, error) {

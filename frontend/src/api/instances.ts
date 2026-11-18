@@ -6,6 +6,8 @@ export type RestartPolicy = 'no' | 'always' | 'unless-stopped' | 'on-failure'
 
 export interface ServiceInstance {
   id: string
+  project_id: string
+  environment_id: string
   service_type_id: string
   host_id: string
   name: string
@@ -156,22 +158,22 @@ export const instanceApi = {
     return response.data.data || ''
   },
 
-  async deploy(id: string): Promise<ServiceInstance> {
-    const response = await api.post<ApiResponse<ServiceInstance>>(`/service-instances/${encodeURIComponent(id)}/deploy`, undefined, { timeout: 180000 })
+  async deploy(id: string, parameterValues?: Record<string, string>): Promise<ServiceInstance> {
+    const response = await api.post<ApiResponse<ServiceInstance>>(`/service-instances/${encodeURIComponent(id)}/deploy`, parameterValues ? { parameter_values: parameterValues } : undefined, { timeout: 180000 })
     return response.data.data
   },
 
-  async updateImage(id: string, image: string): Promise<ServiceInstance> {
+  async updateImage(id: string, image: string, parameterValues?: Record<string, string>): Promise<ServiceInstance> {
     const response = await api.post<ApiResponse<ServiceInstance>>(
       `/service-instances/${encodeURIComponent(id)}/update-image`,
-      { image },
+      { image, parameter_values: parameterValues },
       { timeout: 600000 },
     )
     return response.data.data
   },
 
-  async start(id: string): Promise<void> {
-    await api.post(`/service-instances/${encodeURIComponent(id)}/start`)
+  async start(id: string, parameterValues?: Record<string, string>): Promise<void> {
+    await api.post(`/service-instances/${encodeURIComponent(id)}/start`, parameterValues ? { parameter_values: parameterValues } : undefined, parameterValues ? { timeout: 180000 } : undefined)
   },
 
   async stop(id: string): Promise<void> {
@@ -203,11 +205,12 @@ export const instanceApi = {
     return response.data.data
   },
 
-  async startBatchOperation(instanceIds: string[], action: BatchAction, image?: string): Promise<ServiceInstanceOperation> {
+  async startBatchOperation(instanceIds: string[], action: BatchAction, image?: string, valuesByType?: Record<string, Record<string, string>>): Promise<ServiceInstanceOperation> {
     const response = await api.post<ApiResponse<ServiceInstanceOperation>>('/service-instances/batch-operations', {
       instance_ids: instanceIds,
       action,
       ...(image ? { image } : {}),
+      ...(valuesByType ? { parameter_values_by_type: valuesByType } : {}),
     })
     return response.data.data
   },

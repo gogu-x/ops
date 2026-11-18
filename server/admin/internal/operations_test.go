@@ -8,7 +8,7 @@ import (
 	"github.com/gogu-x/ops/admin/internal/application"
 	"github.com/gogu-x/ops/admin/internal/environment"
 	"github.com/gogu-x/ops/admin/internal/project"
-	"github.com/gogu-x/ops/admin/internal/service"
+	"github.com/gogu-x/ops/admin/internal/servicetype"
 	"github.com/gogu-x/ops/instance"
 	"github.com/gogu-x/ops/model"
 )
@@ -31,7 +31,7 @@ func TestBatchOperationTracksPartialResultsAndOwner(t *testing.T) {
 		operationTestGateway{},
 		project.NewMemoryRepository(),
 		environment.NewMemoryRepository(),
-		service.NewMemoryRepository(),
+		servicetype.NewMemoryRepository(),
 		instance.NewMemoryRepository(),
 	)
 	manager := newServiceOperationManager(app)

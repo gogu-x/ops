@@ -1,4 +1,4 @@
-package internal
+package rollout
 
 import (
 	"context"
@@ -16,7 +16,9 @@ import (
 
 var errRolloutLocked = errors.New("实例或滚动发布任务已被其他操作占用")
 
-type rolloutRepository interface {
+type Repository interface {
+	ListTemplates(context.Context) ([]model.RolloutTemplate, error)
+	CreateTemplate(context.Context, model.RolloutTemplate) error
 	EnsureIndexes(context.Context) error
 	Create(context.Context, model.RolloutJob, []model.RolloutItem, model.RolloutAuditEvent) error
 	Get(context.Context, string) (model.RolloutJob, error)
@@ -39,17 +41,18 @@ type rolloutRepository interface {
 	ClearLegacyOperationLocks(context.Context) error
 }
 
-type memoryRolloutRepository struct {
-	mu     sync.Mutex
-	jobs   map[string]model.RolloutJob
-	items  map[string][]model.RolloutItem
-	events map[string][]model.RolloutAuditEvent
-	locks  map[string]string
-	slot   string
+type MemoryRepository struct {
+	templates []model.RolloutTemplate
+	mu        sync.Mutex
+	jobs      map[string]model.RolloutJob
+	items     map[string][]model.RolloutItem
+	events    map[string][]model.RolloutAuditEvent
+	locks     map[string]string
+	slot      string
 }
 
-func newMemoryRolloutRepository() *memoryRolloutRepository {
-	return &memoryRolloutRepository{
+func NewMemoryRepository() *MemoryRepository {
+	return &MemoryRepository{
 		jobs:   make(map[string]model.RolloutJob),
 		items:  make(map[string][]model.RolloutItem),
 		events: make(map[string][]model.RolloutAuditEvent),
@@ -57,9 +60,9 @@ func newMemoryRolloutRepository() *memoryRolloutRepository {
 	}
 }
 
-func (r *memoryRolloutRepository) EnsureIndexes(context.Context) error { return nil }
+func (r *MemoryRepository) EnsureIndexes(context.Context) error { return nil }
 
-func (r *memoryRolloutRepository) Create(_ context.Context, job model.RolloutJob, items []model.RolloutItem, event model.RolloutAuditEvent) error {
+func (r *MemoryRepository) Create(_ context.Context, job model.RolloutJob, items []model.RolloutItem, event model.RolloutAuditEvent) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, exists := r.jobs[job.ID]; exists {
@@ -71,7 +74,7 @@ func (r *memoryRolloutRepository) Create(_ context.Context, job model.RolloutJob
 	return nil
 }
 
-func (r *memoryRolloutRepository) Get(_ context.Context, id string) (model.RolloutJob, error) {
+func (r *MemoryRepository) Get(_ context.Context, id string) (model.RolloutJob, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	job, ok := r.jobs[id]
@@ -81,7 +84,7 @@ func (r *memoryRolloutRepository) Get(_ context.Context, id string) (model.Rollo
 	return job, nil
 }
 
-func (r *memoryRolloutRepository) List(_ context.Context, projectIDs []string, limit int) ([]model.RolloutJob, error) {
+func (r *MemoryRepository) List(_ context.Context, projectIDs []string, limit int) ([]model.RolloutJob, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	allowed := make(map[string]struct{}, len(projectIDs))
@@ -104,7 +107,7 @@ func (r *memoryRolloutRepository) List(_ context.Context, projectIDs []string, l
 	return result, nil
 }
 
-func (r *memoryRolloutRepository) Items(_ context.Context, id string) ([]model.RolloutItem, error) {
+func (r *MemoryRepository) Items(_ context.Context, id string) ([]model.RolloutItem, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.jobs[id]; !ok {
@@ -113,7 +116,7 @@ func (r *memoryRolloutRepository) Items(_ context.Context, id string) ([]model.R
 	return append([]model.RolloutItem(nil), r.items[id]...), nil
 }
 
-func (r *memoryRolloutRepository) UpdateJob(_ context.Context, job model.RolloutJob) error {
+func (r *MemoryRepository) UpdateJob(_ context.Context, job model.RolloutJob) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.jobs[job.ID]; !ok {
@@ -123,7 +126,7 @@ func (r *memoryRolloutRepository) UpdateJob(_ context.Context, job model.Rollout
 	return nil
 }
 
-func (r *memoryRolloutRepository) SetJobStatus(_ context.Context, id, status, reason string) error {
+func (r *MemoryRepository) SetJobStatus(_ context.Context, id, status, reason string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	job, ok := r.jobs[id]
@@ -135,7 +138,7 @@ func (r *memoryRolloutRepository) SetJobStatus(_ context.Context, id, status, re
 	return nil
 }
 
-func (r *memoryRolloutRepository) SetJobProgress(_ context.Context, id string, total, completed, succeeded, failed int) error {
+func (r *MemoryRepository) SetJobProgress(_ context.Context, id string, total, completed, succeeded, failed int) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	job, ok := r.jobs[id]
@@ -148,7 +151,7 @@ func (r *memoryRolloutRepository) SetJobProgress(_ context.Context, id string, t
 	return nil
 }
 
-func (r *memoryRolloutRepository) UpdateItem(_ context.Context, item model.RolloutItem) error {
+func (r *MemoryRepository) UpdateItem(_ context.Context, item model.RolloutItem) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	items, ok := r.items[item.JobID]
@@ -165,14 +168,14 @@ func (r *memoryRolloutRepository) UpdateItem(_ context.Context, item model.Rollo
 	return model.ErrNotFound
 }
 
-func (r *memoryRolloutRepository) AppendEvent(_ context.Context, event model.RolloutAuditEvent) error {
+func (r *MemoryRepository) AppendEvent(_ context.Context, event model.RolloutAuditEvent) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.events[event.JobID] = append(r.events[event.JobID], event)
 	return nil
 }
 
-func (r *memoryRolloutRepository) Events(_ context.Context, id string, limit int) ([]model.RolloutAuditEvent, error) {
+func (r *MemoryRepository) Events(_ context.Context, id string, limit int) ([]model.RolloutAuditEvent, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	items := append([]model.RolloutAuditEvent(nil), r.events[id]...)
@@ -182,7 +185,7 @@ func (r *memoryRolloutRepository) Events(_ context.Context, id string, limit int
 	return items, nil
 }
 
-func (r *memoryRolloutRepository) ClaimNext(_ context.Context, worker string, now time.Time, lease time.Duration) (model.RolloutJob, bool, error) {
+func (r *MemoryRepository) ClaimNext(_ context.Context, worker string, now time.Time, lease time.Duration) (model.RolloutJob, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	var candidate *model.RolloutJob
@@ -206,7 +209,7 @@ func (r *memoryRolloutRepository) ClaimNext(_ context.Context, worker string, no
 	return *candidate, true, nil
 }
 
-func (r *memoryRolloutRepository) RenewLease(_ context.Context, id, worker string, until time.Time) error {
+func (r *MemoryRepository) RenewLease(_ context.Context, id, worker string, until time.Time) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	job, ok := r.jobs[id]
@@ -219,7 +222,7 @@ func (r *memoryRolloutRepository) RenewLease(_ context.Context, id, worker strin
 	return nil
 }
 
-func (r *memoryRolloutRepository) ReleaseLease(_ context.Context, id, worker string) error {
+func (r *MemoryRepository) ReleaseLease(_ context.Context, id, worker string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	job, ok := r.jobs[id]
@@ -232,7 +235,7 @@ func (r *memoryRolloutRepository) ReleaseLease(_ context.Context, id, worker str
 	return nil
 }
 
-func (r *memoryRolloutRepository) AcquireInstanceLocks(_ context.Context, owner string, ids []string) error {
+func (r *MemoryRepository) AcquireInstanceLocks(_ context.Context, owner string, ids []string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, id := range ids {
@@ -246,7 +249,7 @@ func (r *memoryRolloutRepository) AcquireInstanceLocks(_ context.Context, owner 
 	return nil
 }
 
-func (r *memoryRolloutRepository) ReleaseInstanceLocks(_ context.Context, owner string) error {
+func (r *MemoryRepository) ReleaseInstanceLocks(_ context.Context, owner string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for id, current := range r.locks {
@@ -257,7 +260,7 @@ func (r *memoryRolloutRepository) ReleaseInstanceLocks(_ context.Context, owner 
 	return nil
 }
 
-func (r *memoryRolloutRepository) AcquireRolloutSlot(_ context.Context, owner string) (string, bool, error) {
+func (r *MemoryRepository) AcquireRolloutSlot(_ context.Context, owner string) (string, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.slot != "" && r.slot != owner {
@@ -267,7 +270,7 @@ func (r *memoryRolloutRepository) AcquireRolloutSlot(_ context.Context, owner st
 	return owner, true, nil
 }
 
-func (r *memoryRolloutRepository) ReleaseRolloutSlot(_ context.Context, owner string) error {
+func (r *MemoryRepository) ReleaseRolloutSlot(_ context.Context, owner string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.slot == owner {
@@ -276,14 +279,14 @@ func (r *memoryRolloutRepository) ReleaseRolloutSlot(_ context.Context, owner st
 	return nil
 }
 
-func (r *memoryRolloutRepository) IsInstanceLocked(_ context.Context, id string) (bool, error) {
+func (r *MemoryRepository) IsInstanceLocked(_ context.Context, id string) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	_, ok := r.locks[id]
 	return ok, nil
 }
 
-func (r *memoryRolloutRepository) ClearLegacyOperationLocks(_ context.Context) error {
+func (r *MemoryRepository) ClearLegacyOperationLocks(_ context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for id, owner := range r.locks {
@@ -294,18 +297,22 @@ func (r *memoryRolloutRepository) ClearLegacyOperationLocks(_ context.Context) e
 	return nil
 }
 
-type mongoRolloutRepository struct{ db *mongo.Database }
+type MongoRepository struct{ db *mongo.Database }
 
-func newMongoRolloutRepository(db *mongo.Database) *mongoRolloutRepository {
-	return &mongoRolloutRepository{db: db}
+func NewMongoRepository(db *mongo.Database) *MongoRepository {
+	return &MongoRepository{db: db}
 }
 
-func (r *mongoRolloutRepository) jobs() *mongo.Collection   { return r.db.Collection("rollout_jobs") }
-func (r *mongoRolloutRepository) items() *mongo.Collection  { return r.db.Collection("rollout_items") }
-func (r *mongoRolloutRepository) events() *mongo.Collection { return r.db.Collection("rollout_events") }
-func (r *mongoRolloutRepository) locks() *mongo.Collection  { return r.db.Collection("rollout_locks") }
+func (r *MongoRepository) templates() *mongo.Collection {
+	return r.db.Collection("rollout_templates")
+}
 
-func (r *mongoRolloutRepository) EnsureIndexes(ctx context.Context) error {
+func (r *MongoRepository) jobs() *mongo.Collection   { return r.db.Collection("rollout_jobs") }
+func (r *MongoRepository) items() *mongo.Collection  { return r.db.Collection("rollout_items") }
+func (r *MongoRepository) events() *mongo.Collection { return r.db.Collection("rollout_events") }
+func (r *MongoRepository) locks() *mongo.Collection  { return r.db.Collection("rollout_locks") }
+
+func (r *MongoRepository) EnsureIndexes(ctx context.Context) error {
 	indexes := []struct {
 		collection *mongo.Collection
 		models     []mongo.IndexModel
@@ -322,7 +329,7 @@ func (r *mongoRolloutRepository) EnsureIndexes(ctx context.Context) error {
 	return nil
 }
 
-func (r *mongoRolloutRepository) Create(ctx context.Context, job model.RolloutJob, items []model.RolloutItem, event model.RolloutAuditEvent) error {
+func (r *MongoRepository) Create(ctx context.Context, job model.RolloutJob, items []model.RolloutItem, event model.RolloutAuditEvent) error {
 	if _, err := r.jobs().InsertOne(ctx, job); err != nil {
 		return err
 	}
@@ -345,7 +352,7 @@ func (r *mongoRolloutRepository) Create(ctx context.Context, job model.RolloutJo
 	return nil
 }
 
-func (r *mongoRolloutRepository) Get(ctx context.Context, id string) (model.RolloutJob, error) {
+func (r *MongoRepository) Get(ctx context.Context, id string) (model.RolloutJob, error) {
 	var job model.RolloutJob
 	err := r.jobs().FindOne(ctx, bson.M{"_id": id}).Decode(&job)
 	if errors.Is(err, mongo.ErrNoDocuments) {
@@ -354,7 +361,7 @@ func (r *mongoRolloutRepository) Get(ctx context.Context, id string) (model.Roll
 	return job, err
 }
 
-func (r *mongoRolloutRepository) List(ctx context.Context, projectIDs []string, limit int) ([]model.RolloutJob, error) {
+func (r *MongoRepository) List(ctx context.Context, projectIDs []string, limit int) ([]model.RolloutJob, error) {
 	filter := bson.M{}
 	if len(projectIDs) > 0 {
 		filter["project_id"] = bson.M{"$in": projectIDs}
@@ -374,7 +381,7 @@ func (r *mongoRolloutRepository) List(ctx context.Context, projectIDs []string, 
 	return result, nil
 }
 
-func (r *mongoRolloutRepository) Items(ctx context.Context, id string) ([]model.RolloutItem, error) {
+func (r *MongoRepository) Items(ctx context.Context, id string) ([]model.RolloutItem, error) {
 	cursor, err := r.items().Find(ctx, bson.M{"job_id": id}, options.Find().SetSort(bson.D{{Key: "group_key", Value: 1}, {Key: "name", Value: 1}}))
 	if err != nil {
 		return nil, err
@@ -386,32 +393,32 @@ func (r *mongoRolloutRepository) Items(ctx context.Context, id string) ([]model.
 	return items, nil
 }
 
-func (r *mongoRolloutRepository) UpdateJob(ctx context.Context, job model.RolloutJob) error {
+func (r *MongoRepository) UpdateJob(ctx context.Context, job model.RolloutJob) error {
 	_, err := r.jobs().ReplaceOne(ctx, bson.M{"_id": job.ID}, job)
 	return err
 }
 
-func (r *mongoRolloutRepository) SetJobStatus(ctx context.Context, id, status, reason string) error {
+func (r *MongoRepository) SetJobStatus(ctx context.Context, id, status, reason string) error {
 	_, err := r.jobs().UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{"status": status, "pause_reason": reason, "updated_at": time.Now().UTC()}})
 	return err
 }
 
-func (r *mongoRolloutRepository) SetJobProgress(ctx context.Context, id string, total, completed, succeeded, failed int) error {
+func (r *MongoRepository) SetJobProgress(ctx context.Context, id string, total, completed, succeeded, failed int) error {
 	_, err := r.jobs().UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{"total": total, "completed": completed, "succeeded": succeeded, "failed": failed, "updated_at": time.Now().UTC()}})
 	return err
 }
 
-func (r *mongoRolloutRepository) UpdateItem(ctx context.Context, item model.RolloutItem) error {
+func (r *MongoRepository) UpdateItem(ctx context.Context, item model.RolloutItem) error {
 	_, err := r.items().ReplaceOne(ctx, bson.M{"_id": item.ID, "job_id": item.JobID}, item)
 	return err
 }
 
-func (r *mongoRolloutRepository) AppendEvent(ctx context.Context, event model.RolloutAuditEvent) error {
+func (r *MongoRepository) AppendEvent(ctx context.Context, event model.RolloutAuditEvent) error {
 	_, err := r.events().InsertOne(ctx, event)
 	return err
 }
 
-func (r *mongoRolloutRepository) Events(ctx context.Context, id string, limit int) ([]model.RolloutAuditEvent, error) {
+func (r *MongoRepository) Events(ctx context.Context, id string, limit int) ([]model.RolloutAuditEvent, error) {
 	opts := options.Find().SetSort(bson.D{{Key: "created_at", Value: -1}})
 	if limit > 0 {
 		opts.SetLimit(int64(limit))
@@ -430,7 +437,7 @@ func (r *mongoRolloutRepository) Events(ctx context.Context, id string, limit in
 	return events, nil
 }
 
-func (r *mongoRolloutRepository) ClaimNext(ctx context.Context, worker string, now time.Time, lease time.Duration) (model.RolloutJob, bool, error) {
+func (r *MongoRepository) ClaimNext(ctx context.Context, worker string, now time.Time, lease time.Duration) (model.RolloutJob, bool, error) {
 	filter := bson.M{"$or": []bson.M{{"status": "queued", "$or": []bson.M{{"lease_until": bson.M{"$exists": false}}, {"lease_until": bson.M{"$lte": now}}}}, {"status": "running", "lease_until": bson.M{"$lte": now}}}}
 	update := bson.M{"$set": bson.M{"status": "running", "lease_owner": worker, "lease_until": now.Add(lease), "updated_at": now}}
 	var job model.RolloutJob
@@ -441,7 +448,7 @@ func (r *mongoRolloutRepository) ClaimNext(ctx context.Context, worker string, n
 	return job, err == nil, err
 }
 
-func (r *mongoRolloutRepository) RenewLease(ctx context.Context, id, worker string, until time.Time) error {
+func (r *MongoRepository) RenewLease(ctx context.Context, id, worker string, until time.Time) error {
 	result, err := r.jobs().UpdateOne(ctx, bson.M{"_id": id, "status": "running", "lease_owner": worker}, bson.M{"$set": bson.M{"lease_until": until, "updated_at": time.Now().UTC()}})
 	if err != nil {
 		return err
@@ -452,12 +459,12 @@ func (r *mongoRolloutRepository) RenewLease(ctx context.Context, id, worker stri
 	return nil
 }
 
-func (r *mongoRolloutRepository) ReleaseLease(ctx context.Context, id, worker string) error {
+func (r *MongoRepository) ReleaseLease(ctx context.Context, id, worker string) error {
 	_, err := r.jobs().UpdateOne(ctx, bson.M{"_id": id, "lease_owner": worker}, bson.M{"$set": bson.M{"lease_until": time.Now().UTC().Add(-time.Second)}, "$unset": bson.M{"lease_owner": ""}})
 	return err
 }
 
-func (r *mongoRolloutRepository) AcquireInstanceLocks(ctx context.Context, owner string, ids []string) error {
+func (r *MongoRepository) AcquireInstanceLocks(ctx context.Context, owner string, ids []string) error {
 	if len(ids) == 0 {
 		return errors.New("没有要锁定的实例")
 	}
@@ -477,12 +484,12 @@ func (r *mongoRolloutRepository) AcquireInstanceLocks(ctx context.Context, owner
 	return err
 }
 
-func (r *mongoRolloutRepository) ReleaseInstanceLocks(ctx context.Context, owner string) error {
+func (r *MongoRepository) ReleaseInstanceLocks(ctx context.Context, owner string) error {
 	_, err := r.locks().DeleteMany(ctx, bson.M{"owner_id": owner, "_id": bson.M{"$ne": "@rollout-active"}})
 	return err
 }
 
-func (r *mongoRolloutRepository) AcquireRolloutSlot(ctx context.Context, owner string) (string, bool, error) {
+func (r *MongoRepository) AcquireRolloutSlot(ctx context.Context, owner string) (string, bool, error) {
 	_, err := r.locks().InsertOne(ctx, bson.M{"_id": "@rollout-active", "owner_id": owner, "created_at": time.Now().UTC()})
 	if err == nil {
 		return owner, true, nil
@@ -499,12 +506,12 @@ func (r *mongoRolloutRepository) AcquireRolloutSlot(ctx context.Context, owner s
 	return lock.OwnerID, lock.OwnerID == owner, nil
 }
 
-func (r *mongoRolloutRepository) ReleaseRolloutSlot(ctx context.Context, owner string) error {
+func (r *MongoRepository) ReleaseRolloutSlot(ctx context.Context, owner string) error {
 	_, err := r.locks().DeleteOne(ctx, bson.M{"_id": "@rollout-active", "owner_id": owner})
 	return err
 }
 
-func (r *mongoRolloutRepository) IsInstanceLocked(ctx context.Context, id string) (bool, error) {
+func (r *MongoRepository) IsInstanceLocked(ctx context.Context, id string) (bool, error) {
 	err := r.locks().FindOne(ctx, bson.M{"_id": id}).Err()
 	if errors.Is(err, mongo.ErrNoDocuments) {
 		return false, nil
@@ -512,7 +519,35 @@ func (r *mongoRolloutRepository) IsInstanceLocked(ctx context.Context, id string
 	return err == nil, err
 }
 
-func (r *mongoRolloutRepository) ClearLegacyOperationLocks(ctx context.Context) error {
+func (r *MongoRepository) ClearLegacyOperationLocks(ctx context.Context) error {
 	_, err := r.locks().DeleteMany(ctx, bson.M{"_id": bson.M{"$ne": "@rollout-active"}, "owner_id": bson.M{"$not": bson.M{"$regex": "^rollout:"}}})
+	return err
+}
+
+func (r *MemoryRepository) ListTemplates(_ context.Context) ([]model.RolloutTemplate, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]model.RolloutTemplate{}, r.templates...), nil
+}
+
+func (r *MemoryRepository) CreateTemplate(_ context.Context, item model.RolloutTemplate) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.templates = append(r.templates, item)
+	return nil
+}
+
+func (r *MongoRepository) ListTemplates(ctx context.Context) ([]model.RolloutTemplate, error) {
+	cursor, err := r.templates().Find(ctx, bson.D{})
+	if err != nil {
+		return nil, err
+	}
+	items := make([]model.RolloutTemplate, 0)
+	err = cursor.All(ctx, &items)
+	return items, err
+}
+
+func (r *MongoRepository) CreateTemplate(ctx context.Context, item model.RolloutTemplate) error {
+	_, err := r.templates().InsertOne(ctx, item)
 	return err
 }

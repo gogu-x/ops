@@ -1,4 +1,4 @@
-package internal
+package rollout
 
 import (
 	"context"
@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gogu-x/ops/admin/internal/application"
+	"github.com/gogu-x/ops/admin/internal/servicetype"
 	"github.com/gogu-x/ops/model"
 	"github.com/google/uuid"
 )
@@ -19,8 +22,8 @@ const (
 	rolloutPollInterval  = 2 * time.Second
 )
 
-type rolloutManager struct {
-	repo     rolloutRepository
+type Manager struct {
+	repo     Repository
 	app      *application.Service
 	workerID string
 	ctx      context.Context
@@ -29,11 +32,11 @@ type rolloutManager struct {
 	started  sync.Once
 }
 
-func newRolloutManager(repo rolloutRepository, app *application.Service) *rolloutManager {
-	return &rolloutManager{repo: repo, app: app, workerID: uuid.NewString(), wake: make(chan struct{}, 1)}
+func NewManager(repo Repository, app *application.Service) *Manager {
+	return &Manager{repo: repo, app: app, workerID: uuid.NewString(), wake: make(chan struct{}, 1)}
 }
 
-func (m *rolloutManager) Start() error {
+func (m *Manager) Start() error {
 	var startErr error
 	m.started.Do(func() {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -55,13 +58,13 @@ func (m *rolloutManager) Start() error {
 	return startErr
 }
 
-func (m *rolloutManager) Stop() {
+func (m *Manager) Stop() {
 	if m.cancel != nil {
 		m.cancel()
 	}
 }
 
-func (m *rolloutManager) Create(job model.RolloutJob, items []model.RolloutItem) (model.RolloutJob, error) {
+func (m *Manager) Create(job model.RolloutJob, items []model.RolloutItem) (model.RolloutJob, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	job.ID = uuid.NewString()
@@ -131,7 +134,7 @@ func rolloutTerminal(status string) bool {
 	return status == "succeeded" || status == "partial" || status == "failed"
 }
 
-func (m *rolloutManager) Detail(id string) (model.RolloutDetail, error) {
+func (m *Manager) Detail(id string) (model.RolloutDetail, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	job, err := m.repo.Get(ctx, id)
@@ -161,7 +164,7 @@ func (m *rolloutManager) Detail(id string) (model.RolloutDetail, error) {
 	return model.RolloutDetail{Job: job, Items: items, Events: events}, nil
 }
 
-func (m *rolloutManager) List(projectIDs []string, limit int) ([]model.RolloutJob, error) {
+func (m *Manager) List(projectIDs []string, limit int) ([]model.RolloutJob, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	jobs, err := m.repo.List(ctx, projectIDs, limit)
@@ -189,7 +192,7 @@ func (m *rolloutManager) List(projectIDs []string, limit int) ([]model.RolloutJo
 	return jobs, nil
 }
 
-func (m *rolloutManager) Pause(id, operator, reason string) error {
+func (m *Manager) Pause(id, operator, reason string) error {
 	job, err := m.repo.Get(context.Background(), id)
 	if err != nil {
 		return err
@@ -204,7 +207,7 @@ func (m *rolloutManager) Pause(id, operator, reason string) error {
 	return nil
 }
 
-func (m *rolloutManager) Resume(id, operator string) error {
+func (m *Manager) Resume(id, operator string) error {
 	job, err := m.repo.Get(context.Background(), id)
 	if err != nil {
 		return err
@@ -220,7 +223,7 @@ func (m *rolloutManager) Resume(id, operator string) error {
 	return nil
 }
 
-func (m *rolloutManager) RetryFailed(id, operator string) error {
+func (m *Manager) RetryFailed(id, operator string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	job, err := m.repo.Get(ctx, id)
@@ -302,7 +305,7 @@ func (m *rolloutManager) RetryFailed(id, operator string) error {
 	return nil
 }
 
-func (m *rolloutManager) runLoop(ctx context.Context) {
+func (m *Manager) runLoop(ctx context.Context) {
 	ticker := time.NewTicker(rolloutPollInterval)
 	defer ticker.Stop()
 	for {
@@ -316,14 +319,14 @@ func (m *rolloutManager) runLoop(ctx context.Context) {
 	}
 }
 
-func (m *rolloutManager) signal() {
+func (m *Manager) signal() {
 	select {
 	case m.wake <- struct{}{}:
 	default:
 	}
 }
 
-func (m *rolloutManager) claimAndRun(ctx context.Context) {
+func (m *Manager) claimAndRun(ctx context.Context) {
 	claimCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	job, ok, err := m.repo.ClaimNext(claimCtx, m.workerID, time.Now().UTC(), rolloutLeaseDuration)
 	cancel()
@@ -337,7 +340,7 @@ func (m *rolloutManager) claimAndRun(ctx context.Context) {
 	m.process(ctx, job)
 }
 
-func (m *rolloutManager) process(ctx context.Context, job model.RolloutJob) {
+func (m *Manager) process(ctx context.Context, job model.RolloutJob) {
 	jobCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	workCtx, cancelWork := context.WithCancel(jobCtx)
@@ -554,19 +557,20 @@ func rolloutActionApplied(job model.RolloutJob, item model.RolloutItem, current 
 	if statusErr != nil || current.Status != model.StatusRunning || current.ContainerID == "" || current.ContainerID == item.PreviousContainerID {
 		return false
 	}
-	return job.Action != "update_image" || current.ContainerImage == item.TargetImage
+	return (job.Action != "update_image" || current.ContainerImage == item.TargetImage) &&
+		servicetype.ParameterValuesMatch(current.Params, item.ParameterValues)
 }
 
-func (m *rolloutManager) runItem(ctx context.Context, job model.RolloutJob, item model.RolloutItem) {
+func (m *Manager) runItem(ctx context.Context, job model.RolloutJob, item model.RolloutItem) {
 	if ctx.Err() != nil {
 		return
 	}
 	var err error
 	switch job.Action {
 	case "restart":
-		err = m.app.ContainerAction(item.InstanceID, "restart")
+		err = m.app.RestartInstanceWithParameters(ctx, item.InstanceID, job.Operator, item.ParameterValues)
 	case "update_image":
-		_, err = m.app.UpdateInstanceImage(context.Background(), item.InstanceID, item.TargetImage, job.Operator)
+		_, err = m.app.UpdateInstanceImageWithParameters(ctx, item.InstanceID, item.TargetImage, job.Operator, item.ParameterValues)
 	default:
 		err = fmt.Errorf("unsupported rollout action %q", job.Action)
 	}
@@ -584,7 +588,7 @@ func (m *rolloutManager) runItem(ctx context.Context, job model.RolloutJob, item
 	m.verifyItem(ctx, job, item)
 }
 
-func (m *rolloutManager) verifyItem(ctx context.Context, job model.RolloutJob, item model.RolloutItem) {
+func (m *Manager) verifyItem(ctx context.Context, job model.RolloutJob, item model.RolloutItem) {
 	deadline := time.NewTimer(time.Duration(job.HealthTimeoutSeconds) * time.Second)
 	defer deadline.Stop()
 	ticker := time.NewTicker(2 * time.Second)
@@ -629,7 +633,7 @@ func (m *rolloutManager) verifyItem(ctx context.Context, job model.RolloutJob, i
 	}
 }
 
-func (m *rolloutManager) failItem(job model.RolloutJob, item model.RolloutItem, reason string) {
+func (m *Manager) failItem(job model.RolloutJob, item model.RolloutItem, reason string) {
 	_ = m.repo.SetJobStatus(context.Background(), job.ID, "paused", reason)
 	item.Status = "failed"
 	item.Error = reason
@@ -643,12 +647,12 @@ func (m *rolloutManager) failItem(job model.RolloutJob, item model.RolloutItem, 
 	m.refreshProgress(job.ID, nil)
 }
 
-func (m *rolloutManager) pause(id, operator, reason string) {
+func (m *Manager) pause(id, operator, reason string) {
 	_ = m.repo.SetJobStatus(context.Background(), id, "paused", reason)
 	_ = m.repo.AppendEvent(context.Background(), rolloutEvent(id, "", operator, "auto_paused", reason))
 }
 
-func (m *rolloutManager) finish(id, operator, status string) {
+func (m *Manager) finish(id, operator, status string) {
 	if err := m.repo.SetJobStatus(context.Background(), id, status, ""); err != nil {
 		log.Printf("[ops] finish rollout job %s: %v", id, err)
 		return
@@ -658,7 +662,7 @@ func (m *rolloutManager) finish(id, operator, status string) {
 	_ = m.repo.ReleaseRolloutSlot(context.Background(), id)
 }
 
-func (m *rolloutManager) refreshProgress(id string, supplied []model.RolloutItem) {
+func (m *Manager) refreshProgress(id string, supplied []model.RolloutItem) {
 	items := supplied
 	if items == nil {
 		var err error
@@ -701,4 +705,54 @@ func firstNonEmpty(value, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+var ErrInvalidTemplate = errors.New("无效的策略模板")
+
+func (m *Manager) ListTemplates(ctx context.Context) ([]model.RolloutTemplate, error) {
+	return m.repo.ListTemplates(ctx)
+}
+
+func (m *Manager) CreateTemplate(ctx context.Context, item model.RolloutTemplate) (model.RolloutTemplate, error) {
+	item.Name = strings.TrimSpace(item.Name)
+	if item.Name == "" || utf8.RuneCountInString(item.Name) > 60 {
+		return model.RolloutTemplate{}, fmt.Errorf("%w: %s", ErrInvalidTemplate, "模板名称需为 1 到 60 个字符")
+	}
+	valid := false
+	switch item.Kind {
+	case "release":
+		valid = item.MaxUnavailable >= 1 && item.MaxUnavailable <= 1000 &&
+			item.MaxParallel >= 1 && item.MaxParallel <= 50 &&
+			item.MaxParallelPerGroup >= 1 && item.MaxParallelPerGroup <= item.MaxParallel
+		item.Probe, item.Timeout = nil, 0
+	case "health":
+		valid = item.Probe != nil && ValidateProbe(*item.Probe) == nil && item.Timeout >= 10 && item.Timeout <= 1800
+		item.MaxUnavailable, item.MaxParallel, item.MaxParallelPerGroup = 0, 0, 0
+	}
+	if !valid {
+		return model.RolloutTemplate{}, fmt.Errorf("%w: %s", ErrInvalidTemplate, "策略参数无效或超出允许范围")
+	}
+	item.ID = uuid.NewString()
+	if err := m.repo.CreateTemplate(ctx, item); err != nil {
+		return model.RolloutTemplate{}, err
+	}
+	return item, nil
+}
+
+func ValidateProbe(probe model.ReadinessProbe) error {
+	switch probe.Type {
+	case "docker", "tcp":
+	case "http":
+		if probe.Path != "" && !strings.HasPrefix(probe.Path, "/") {
+			return errors.New("HTTP 探针路径必须以 / 开头")
+		}
+	case "":
+		return errors.New("尚未配置就绪检查，请在服务类型中设置 Docker、TCP 或 HTTP 探针")
+	default:
+		return errors.New("就绪检查类型无效")
+	}
+	if (probe.Type == "tcp" || probe.Type == "http") && (probe.Port < 1 || probe.Port > 65535) {
+		return errors.New("TCP/HTTP 探针端口必须在 1 到 65535 之间")
+	}
+	return nil
 }

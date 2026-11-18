@@ -12,7 +12,12 @@ type CreateRequest struct{ Host Host }
 type UpdateRequest struct{ Host Host }
 type DeleteRequest struct{ ID string }
 type TestRequest struct{ ID string }
+type ServiceParameterValuesRequest struct {
+	ParameterValues map[string]string `json:"parameter_values"`
+}
+
 type UpdateServiceInstanceImageRequest struct {
+	ServiceParameterValuesRequest
 	Image string `json:"image" binding:"required"`
 }
 type HostListResponse struct{ Hosts []Host }
@@ -64,8 +69,10 @@ type ListResponse struct{ ServiceInstances []ServiceInstance }
 type EnrichRequest struct{ ServiceInstances []ServiceInstance }
 
 type DeployRequest struct {
-	ID       string
-	Operator string
+	Params    *[]ServiceParam
+	Operation string
+	ID        string
+	Operator  string
 }
 
 var ErrDeploymentUnavailable = errors.New("deployment version is not available for rollback")
@@ -74,6 +81,7 @@ var ErrDeploymentUnavailable = errors.New("deployment version is not available f
 // version tag), pulls the new image on the instance's host, and redeploys
 // the container so it runs the updated image.
 type UpdateImageRequest struct {
+	Params   *[]ServiceParam
 	ID       string
 	Image    string
 	Operator string
@@ -109,9 +117,10 @@ type DeploymentListResponse struct{ Deployments []InstanceDeployment }
 
 // ServiceInstanceBatchOperationRequest starts one operation for multiple service instances.
 type ServiceInstanceBatchOperationRequest struct {
-	InstanceIDs []string `json:"instance_ids" binding:"required,min=1"`
-	Action      string   `json:"action" binding:"required"` // deploy | start | stop | restart | update_image
-	Image       string   `json:"image,omitempty"`
+	ParameterValuesByType map[string]map[string]string `json:"parameter_values_by_type,omitempty"`
+	InstanceIDs           []string                     `json:"instance_ids" binding:"required,min=1"`
+	Action                string                       `json:"action" binding:"required"` // deploy | start | stop | restart | update_image
+	Image                 string                       `json:"image,omitempty"`
 }
 
 // ServiceInstanceOperationItem tracks an individual instance in a batch task.

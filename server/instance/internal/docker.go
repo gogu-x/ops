@@ -189,6 +189,10 @@ func (a *InstanceService) deployWithEvent(id string, recordDeployEvent bool) (mo
 }
 
 func (a *InstanceService) deployWithEventAs(id string, recordDeployEvent bool, operator, operation string) (model.ServiceInstance, error) {
+	return a.deployWithParameters(id, recordDeployEvent, operator, operation, nil)
+}
+
+func (a *InstanceService) deployWithParameters(id string, recordDeployEvent bool, operator, operation string, params *[]model.ServiceParam) (model.ServiceInstance, error) {
 	item, err := a.repo.Get(bgCtx(), id)
 	if err != nil {
 		return model.ServiceInstance{}, err
@@ -201,7 +205,18 @@ func (a *InstanceService) deployWithEventAs(id string, recordDeployEvent bool, o
 		}
 		return model.ServiceInstance{}, err
 	}
+	if params != nil {
+		item.Params = *params
+	}
 	result, err := a.redeploy(item, item.HostID)
+	if err == nil && params != nil {
+		err = a.saveDeploymentConfig(&result)
+	}
+	if operation == "start" {
+		a.recordContainerActionEvent(id, "start", err)
+		a.recordDeployment(id, operation, item.Image, item.Image, operator, err)
+		return result, err
+	}
 	a.recordDeployment(id, operation, item.Image, item.Image, operator, err)
 	if !recordDeployEvent {
 		return result, err
@@ -228,6 +243,10 @@ func (a *InstanceService) updateImage(id, newImage string) (model.ServiceInstanc
 }
 
 func (a *InstanceService) updateImageWithMetadata(id, newImage, operator, operation string) (model.ServiceInstance, error) {
+	return a.updateImageWithParameters(id, newImage, operator, operation, nil)
+}
+
+func (a *InstanceService) updateImageWithParameters(id, newImage, operator, operation string, params *[]model.ServiceParam) (model.ServiceInstance, error) {
 	newImage = strings.TrimSpace(newImage)
 	if newImage == "" {
 		return model.ServiceInstance{}, errors.New("image is required")
@@ -250,8 +269,9 @@ func (a *InstanceService) updateImageWithMetadata(id, newImage, operator, operat
 		}
 	}
 	item.Image = newImage
-	item.UpdatedAt = time.Now().UTC()
-	if err := a.repo.Update(bgCtx(), item); err != nil {
+	if params != nil {
+		item.Params = *params
+	} else if err := a.saveDeploymentConfig(&item); err != nil {
 		a.recordDeployment(id, operation, newImage, previousImage, operator, err)
 		a.recordImageOperationEvent(id, operation, false, err.Error())
 		return model.ServiceInstance{}, err
@@ -264,9 +284,20 @@ func (a *InstanceService) updateImageWithMetadata(id, newImage, operator, operat
 		return item, fmt.Errorf("pull image %s: %w", newImage, err)
 	}
 	result, err := a.redeploy(item, hostID)
+	if err == nil && params != nil {
+		err = a.saveDeploymentConfig(&result)
+	}
 	a.recordDeployment(id, operation, newImage, previousImage, operator, err)
 	a.recordImageOperationEvent(id, operation, err == nil, fmt.Sprintf("镜像已更新为 %s 并重新部署", newImage))
 	return result, err
+}
+
+func (a *InstanceService) saveDeploymentConfig(item *model.ServiceInstance) error {
+	item.UpdatedAt = time.Now().UTC()
+	if err := a.repo.Update(bgCtx(), *item); err != nil {
+		return fmt.Errorf("保存部署配置: %w", err)
+	}
+	return nil
 }
 
 func (a *InstanceService) recordImageOperationEvent(id, operation string, succeeded bool, message string) {
@@ -326,11 +357,7 @@ func (a *InstanceService) redeploy(item model.ServiceInstance, hostID string) (m
 func (a *InstanceService) containerAction(id, action string) error {
 	if action == "restart" {
 		_, err := a.deployWithEventAs(id, false, "", "restart")
-		if err != nil {
-			a.recordEvent(id, model.EventContainerRestartFailed, err.Error())
-		} else {
-			a.recordEvent(id, model.EventContainerRestarted, "容器已重启")
-		}
+		a.recordRestartEvent(id, err)
 		return err
 	}
 	item, err := a.repo.Get(bgCtx(), id)
@@ -347,6 +374,14 @@ func (a *InstanceService) containerAction(id, action string) error {
 	_, err = hostRequest(model.ContainerActionRequest{HostID: item.HostID, ContainerID: containerID, Action: action})
 	a.recordContainerActionEvent(id, action, err)
 	return err
+}
+
+func (a *InstanceService) recordRestartEvent(id string, err error) {
+	if err != nil {
+		a.recordEvent(id, model.EventContainerRestartFailed, err.Error())
+		return
+	}
+	a.recordEvent(id, model.EventContainerRestarted, "容器已重启")
 }
 
 // recordContainerActionEvent records a lifecycle event for a start/stop

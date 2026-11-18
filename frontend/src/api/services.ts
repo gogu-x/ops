@@ -5,10 +5,18 @@ export interface ServiceParam {
   value: string
 }
 
+export interface ServiceParameterField {
+  label: string
+  flag: string
+  kind: 'text' | 'integer' | 'select'
+  required: boolean
+  default_value: string
+  options?: string[]
+}
+
 export interface ServiceType {
+  parameter_fields?: ServiceParameterField[]
   id: string
-  project_id: string
-  environment_id: string
   name: string
   readiness_probe: { type: '' | 'docker' | 'tcp' | 'http'; port: number; path: string }
   created_at?: string

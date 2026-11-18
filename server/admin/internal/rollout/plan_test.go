@@ -1,4 +1,4 @@
-package internal
+package rollout
 
 import (
 	"github.com/gogu-x/ops/model"
@@ -17,7 +17,7 @@ func TestRolloutHasSingleServiceType(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := rolloutHasSingleServiceType(tt.instances); got != tt.want {
+			if got := HasSingleServiceType(tt.instances); got != tt.want {
 				t.Fatalf("got %v, want %v", got, tt.want)
 			}
 		})

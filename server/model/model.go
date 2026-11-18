@@ -20,12 +20,15 @@ const (
 	RoleAdmin = "admin"
 	RoleUser  = "user"
 
-	PermissionDashboardView  = "dashboard.view"
-	PermissionProjectsView   = "projects.view"
-	PermissionServicesView   = "services.view"
-	PermissionServicesManage = "services.manage"
-	PermissionHostsView      = "hosts.view"
-	PermissionHostsManage    = "hosts.manage"
+	PermissionDashboardView          = "dashboard.view"
+	PermissionProjectsView           = "projects.view"
+	PermissionServicesView           = "services.view"
+	PermissionServicesManage         = "services.manage"
+	PermissionServiceTypesView       = "service_types.view"
+	PermissionServiceTypesManage     = "service_types.manage"
+	PermissionRolloutTemplatesManage = "rollout_templates.manage"
+	PermissionHostsView              = "hosts.view"
+	PermissionHostsManage            = "hosts.manage"
 )
 
 var UserPermissions = []string{
@@ -33,6 +36,9 @@ var UserPermissions = []string{
 	PermissionProjectsView,
 	PermissionServicesView,
 	PermissionServicesManage,
+	PermissionServiceTypesView,
+	PermissionServiceTypesManage,
+	PermissionRolloutTemplatesManage,
 	PermissionHostsView,
 	PermissionHostsManage,
 }
@@ -58,13 +64,16 @@ func (u User) HasPermission(permission string) bool {
 			return true
 		}
 	}
-	if permission == PermissionServicesView {
+	switch permission {
+	case PermissionServicesView:
 		return u.HasPermission(PermissionServicesManage)
-	}
-	if permission == PermissionHostsView {
+	case PermissionServiceTypesView:
+		return u.HasPermission(PermissionServiceTypesManage)
+	case PermissionHostsView:
 		return u.HasPermission(PermissionHostsManage)
+	default:
+		return false
 	}
-	return false
 }
 
 type RefreshToken struct {
@@ -159,7 +168,7 @@ type Project struct {
 }
 
 // Environment is a freely-named deployment environment scoped to a project
-// (e.g. "beta", "dev", "dev-1", "dev-2"). It groups service types the same
+// (e.g. "beta", "dev", "dev-1", "dev-2"). It groups service instances the same
 // way a project groups environments; it is not bound to a specific Docker
 // host, which is chosen per ServiceInstance at deploy time.
 type Environment struct {
@@ -170,25 +179,28 @@ type Environment struct {
 	UpdatedAt time.Time `json:"updated_at" bson:"updated_at"`
 }
 
-// ServiceType describes a configurable Docker service and its CLI parameters.
 type ServiceParam struct {
 	Flag  string `json:"flag" bson:"flag"`
 	Value string `json:"value" bson:"value"`
 }
 
-// ServiceType is a lightweight category (e.g. "game", "battle") scoped to
-// a project + environment. It is not bound to a specific Docker host; the
-// host is chosen per ServiceInstance at deploy time. The actual image, CLI
-// params, env vars and notes are configured per deployable ServiceInstance,
-// not on the type itself.
+type ServiceParameterField struct {
+	Label        string   `json:"label" bson:"label"`
+	Flag         string   `json:"flag" bson:"flag"`
+	Kind         string   `json:"kind" bson:"kind"`
+	Required     bool     `json:"required" bson:"required"`
+	DefaultValue string   `json:"default_value" bson:"default_value"`
+	Options      []string `json:"options,omitempty" bson:"options,omitempty"`
+}
+
+// ServiceType is a shared deployment template.
 type ServiceType struct {
-	ID             string         `json:"id" bson:"_id"`
-	ProjectID      string         `json:"project_id" bson:"project_id"`
-	EnvironmentID  string         `json:"environment_id" bson:"environment_id"`
-	Name           string         `json:"name" bson:"name"`
-	ReadinessProbe ReadinessProbe `json:"readiness_probe" bson:"readiness_probe"`
-	CreatedAt      time.Time      `json:"created_at" bson:"created_at"`
-	UpdatedAt      time.Time      `json:"updated_at" bson:"updated_at"`
+	ParameterFields []ServiceParameterField `json:"parameter_fields,omitempty" bson:"parameter_fields,omitempty"`
+	ID              string                  `json:"id" bson:"_id"`
+	Name            string                  `json:"name" bson:"name"`
+	ReadinessProbe  ReadinessProbe          `json:"readiness_probe" bson:"readiness_probe"`
+	CreatedAt       time.Time               `json:"created_at" bson:"created_at"`
+	UpdatedAt       time.Time               `json:"updated_at" bson:"updated_at"`
 }
 
 // ServiceInstance is a concrete deployable server derived from a ServiceType
@@ -202,6 +214,8 @@ type ServiceType struct {
 // runtime-only fields: they reflect the live Docker container state fetched
 // from the instance's host at read time and are never persisted.
 type ServiceInstance struct {
+	ProjectID     string         `json:"project_id" bson:"project_id"`
+	EnvironmentID string         `json:"environment_id" bson:"environment_id"`
 	ID            string         `json:"id" bson:"_id"`
 	ServiceTypeID string         `json:"service_type_id" bson:"service_type_id"`
 	HostID        string         `json:"host_id" bson:"host_id"` // Docker host to deploy this instance's container on, chosen at deploy time

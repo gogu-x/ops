@@ -2,7 +2,7 @@
 import { computed, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Box, FolderOpened, Grid, Monitor, RefreshRight, SwitchButton, User } from '@element-plus/icons-vue'
+import { Box, Collection, FolderOpened, Grid, Monitor, RefreshRight, SwitchButton, User } from '@element-plus/icons-vue'
 import { useAuthStore } from '../stores/auth'
 
 withDefaults(defineProps<{ fixedViewport?: boolean }>(), { fixedViewport: false })
@@ -12,11 +12,15 @@ const auth = useAuthStore()
 interface NavigationChild { path: string; label: string; icon: Component; visible: boolean }
 interface NavigationItem { path: string; label: string; icon: Component; visible: boolean; children: NavigationChild[] }
 const navigation = computed(() => {
+  const canViewServices = auth.hasPermission('services.view')
+  const canViewServiceTypes = auth.hasPermission('service_types.view')
   const items: NavigationItem[] = [
     { path: '/', label: '控制台', icon: Grid, visible: auth.hasPermission('dashboard.view'), children: [] },
-    { path: '/services', label: '服务', icon: Box, visible: auth.hasPermission('services.view'), children: [
-      { path: '/services/rollouts', label: '滚动发布', icon: RefreshRight, visible: auth.hasPermission('services.view') },
+    { path: '/services', label: '服务', icon: Box, visible: canViewServices, children: [
+      { path: '/services/types', label: '服务类型', icon: Collection, visible: true },
+      { path: '/services/rollouts', label: '滚动发布', icon: RefreshRight, visible: true },
     ] },
+    { path: '/services/types', label: '服务类型', icon: Collection, visible: !canViewServices && canViewServiceTypes, children: [] },
     { path: '/projects', label: '项目', icon: FolderOpened, visible: auth.hasPermission('projects.view'), children: [] },
     { path: '/hosts', label: '主机', icon: Monitor, visible: auth.hasPermission('hosts.view'), children: [] },
     { path: '/permissions', label: '权限', icon: User, visible: auth.user?.role === 'admin', children: [] },
@@ -63,7 +67,10 @@ async function logout() {
 .app-navigation a.navigation-subitem { min-height: 36px; padding-left: 29px; font-size: 13px; }
 .app-navigation a.navigation-subitem .el-icon { font-size: 15px; }
 .app-navigation a:hover { background: rgba(255, 255, 255, .08); color: #fff; }
-.app-navigation a.active { background: var(--ops-primary); color: #fff; font-weight: 600; }
+.app-navigation a.active { font-weight: 600; }
+.app-navigation a.active:not(.navigation-subitem) { background: transparent; color: rgba(255, 255, 255, .68); }
+.app-navigation a.active:not(.navigation-subitem) > span { color: #9cb5f4; }
+.app-navigation a.navigation-subitem.active { background: var(--ops-primary); color: #fff; }
 .app-navigation .el-icon { font-size: 17px; }
 .account-menu { margin-top: auto; }
 .account-button { display: flex; gap: 9px; align-items: center; padding: 5px 0 5px 10px; border: 0; background: transparent; color: #fff; font: inherit; cursor: pointer; }
@@ -80,6 +87,7 @@ async function logout() {
   .app-navigation { width: 100%; align-items: center; }
   .navigation-group { width: 100%; align-items: center; }
   .app-navigation a { justify-content: center; width: 44px; padding: 0; }
+  .app-navigation a.active:not(.navigation-subitem) > .el-icon { color: #9cb5f4; }
   .account-button { padding: 0; }
   .is-workspace .app-header { flex-basis: 64px; }
   .app-main { padding: 24px 20px; }
@@ -94,7 +102,7 @@ async function logout() {
   .app-navigation .navigation-group { display: contents; }
   .app-navigation a { flex: 1; flex-direction: column; justify-content: center; gap: 3px; min-height: 0; padding: 4px 2px; border: 0; border-radius: 6px; color: rgba(255, 255, 255, .68); font-size: 10px; }
   .app-navigation a:hover { background: rgba(255, 255, 255, .08); color: #fff; }
-  .app-navigation a.active { background: var(--ops-primary); color: #fff; }
+  .app-navigation a.navigation-subitem { padding: 4px 2px; font-size: 10px; }
   .app-navigation .el-icon { display: block; font-size: 19px; }
   .account-menu { margin: 0 0 0 auto; }
   .app-main { padding: 20px 16px calc(84px + env(safe-area-inset-bottom)); }

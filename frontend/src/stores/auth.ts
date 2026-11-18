@@ -1,6 +1,7 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import api from '../api/client'
+import type { UserPermission } from '../api/users'
 
 export interface User {
   id: string
@@ -18,19 +19,26 @@ interface TokenData {
   user: User
 }
 
+export function hasUserPermission(user: { role?: string; permissions?: string[] } | null, permission: UserPermission) {
+  if (user?.role === 'admin') return true
+  const permissions = user?.permissions || []
+  if (permissions.includes(permission)) return true
+  switch (permission) {
+    case 'services.view': return permissions.includes('services.manage')
+    case 'service_types.view': return permissions.includes('service_types.manage')
+    case 'hosts.view': return permissions.includes('hosts.manage')
+    default: return false
+  }
+}
+
 export const useAuthStore = defineStore('auth', () => {
   const accessToken = ref(localStorage.getItem('ops_access_token') || '')
   const refreshToken = ref(localStorage.getItem('ops_refresh_token') || '')
   const user = ref<User | null>(JSON.parse(localStorage.getItem('ops_user') || 'null'))
   const isAuthenticated = computed(() => Boolean(accessToken.value))
 
-  function hasPermission(permission: string) {
-    if (user.value?.role === 'admin') return true
-    const permissions = user.value?.permissions || []
-    if (permissions.includes(permission)) return true
-    if (permission === 'services.view') return permissions.includes('services.manage')
-    if (permission === 'hosts.view') return permissions.includes('hosts.manage')
-    return false
+  function hasPermission(permission: UserPermission) {
+    return hasUserPermission(user.value, permission)
   }
 
   function save(data: TokenData) {

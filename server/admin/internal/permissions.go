@@ -31,49 +31,18 @@ func allowEnvironment(c *gin.Context, a *AdminService, id string) bool {
 	return false
 }
 
-func allowServiceType(c *gin.Context, a *AdminService, id string) bool {
-	items, err := a.app.ListServiceTypes(c.Request.Context())
-	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"ok": false, "error": err.Error()})
-		return false
-	}
-	for _, item := range items {
-		if item.ID == id {
-			return allowProject(c, item.ProjectID)
-		}
-	}
-	c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "服务类型不存在"})
-	return false
-}
-
 func allowInstance(c *gin.Context, a *AdminService, id string) bool {
 	instances, err := a.app.ListInstances(c.Request.Context())
 	if err != nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"ok": false, "error": err.Error()})
 		return false
 	}
-	var serviceTypeID string
 	for _, item := range instances {
 		if item.ID == id {
-			serviceTypeID = item.ServiceTypeID
-			break
-		}
-	}
-	if serviceTypeID == "" {
-		c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "服务实例不存在"})
-		return false
-	}
-	types, err := a.app.ListServiceTypes(c.Request.Context())
-	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"ok": false, "error": err.Error()})
-		return false
-	}
-	for _, item := range types {
-		if item.ID == serviceTypeID {
 			return allowProject(c, item.ProjectID)
 		}
 	}
-	c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "服务实例所属项目不存在"})
+	c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "服务实例不存在"})
 	return false
 }
 

@@ -1,12 +1,16 @@
 package internal
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gogu-x/ops/admin/internal/servicetype"
 	"github.com/gogu-x/ops/model"
 )
 
@@ -40,18 +44,9 @@ func (a *AdminService) listServiceInstances(c *gin.Context) {
 	}
 	user := currentUser(c)
 	if user.Role != model.RoleAdmin {
-		types, typeErr := a.app.ListServiceTypes(c.Request.Context())
-		if typeErr != nil {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"ok": false, "error": typeErr.Error()})
-			return
-		}
-		projectsByType := make(map[string]string, len(types))
-		for _, item := range types {
-			projectsByType[item.ID] = item.ProjectID
-		}
 		visible := items[:0]
 		for _, item := range items {
-			if user.HasProject(projectsByType[item.ServiceTypeID]) {
+			if user.HasProject(item.ProjectID) {
 				visible = append(visible, item)
 			}
 		}
@@ -66,7 +61,7 @@ func (a *AdminService) createServiceInstance(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "invalid service instance request"})
 		return
 	}
-	if !allowServiceType(c, a, item.ServiceTypeID) {
+	if !allowProject(c, item.ProjectID) {
 		return
 	}
 	created, err := a.app.CreateInstance(c.Request.Context(), item)
@@ -88,7 +83,7 @@ func (a *AdminService) updateServiceInstance(c *gin.Context) {
 		return
 	}
 	item.ID = c.Param("id")
-	if !allowInstance(c, a, item.ID) || !allowServiceType(c, a, item.ServiceTypeID) {
+	if !allowInstance(c, a, item.ID) || !allowProject(c, item.ProjectID) {
 		return
 	}
 	release, available := a.reserveServiceInstance(c, item.ID)
@@ -140,7 +135,11 @@ func (a *AdminService) deployServiceInstance(c *gin.Context) {
 		return
 	}
 	defer release()
-	result, err := a.app.DeployInstance(c.Request.Context(), c.Param("id"), currentUser(c).Username)
+	values, ok := readParameterValues(c)
+	if !ok {
+		return
+	}
+	result, err := a.app.DeployInstanceWithParameters(c.Request.Context(), c.Param("id"), currentUser(c).Username, values)
 	if err != nil {
 		writeInstanceGatewayError(c, err)
 		return
@@ -162,7 +161,7 @@ func (a *AdminService) updateServiceInstanceImage(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "invalid request: image is required"})
 		return
 	}
-	result, err := a.app.UpdateInstanceImage(c.Request.Context(), c.Param("id"), req.Image, currentUser(c).Username)
+	result, err := a.app.UpdateInstanceImageWithParameters(c.Request.Context(), c.Param("id"), req.Image, currentUser(c).Username, req.ParameterValues)
 	if err != nil {
 		writeInstanceGatewayError(c, err)
 		return
@@ -174,10 +173,22 @@ func writeInstanceGatewayError(c *gin.Context, err error) {
 	status := http.StatusBadGateway
 	if errors.Is(err, model.ErrNotFound) {
 		status = http.StatusNotFound
-	} else if errors.Is(err, model.ErrHostUnresolved) || errors.Is(err, model.ErrHostProjectConflict) || errors.Is(err, model.ErrDeploymentUnavailable) {
+	} else if errors.Is(err, servicetype.ErrInvalidParameterValues) || errors.Is(err, model.ErrHostUnresolved) || errors.Is(err, model.ErrHostProjectConflict) || errors.Is(err, model.ErrDeploymentUnavailable) {
 		status = http.StatusBadRequest
 	}
 	c.JSON(status, gin.H{"ok": false, "error": err.Error()})
+}
+
+func readParameterValues(c *gin.Context) (map[string]string, bool) {
+	if c.Request.Body == nil || c.Request.Body == http.NoBody {
+		return nil, true
+	}
+	var request model.ServiceParameterValuesRequest
+	if err := c.ShouldBindJSON(&request); err != nil && !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "启动参数格式无效"})
+		return nil, false
+	}
+	return request.ParameterValues, true
 }
 
 func (a *AdminService) startServiceInstance(c *gin.Context) { a.instanceContainerAction(c, "start") }
@@ -195,7 +206,16 @@ func (a *AdminService) instanceContainerAction(c *gin.Context, action string) {
 		return
 	}
 	defer release()
-	err := a.app.ContainerAction(c.Param("id"), action)
+	var err error
+	if action == "start" {
+		values, ok := readParameterValues(c)
+		if !ok {
+			return
+		}
+		err = a.app.StartInstanceWithParameters(c.Request.Context(), c.Param("id"), currentUser(c).Username, values)
+	} else {
+		err = a.app.ContainerAction(c.Param("id"), action)
+	}
 	if err != nil {
 		writeInstanceGatewayError(c, err)
 		return
@@ -354,6 +374,10 @@ func (a *AdminService) startServiceInstanceBatchOperation(c *gin.Context) {
 		c.JSON(status, gin.H{"ok": false, "error": err.Error()})
 		return
 	}
+	if status, err := a.validateBatchParameterValues(c.Request.Context(), request, instances); err != nil {
+		c.JSON(status, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
 	if a.operations == nil {
 		a.operations = newServiceOperationManager(a.app)
 	}
@@ -370,6 +394,38 @@ func (a *AdminService) startServiceInstanceBatchOperation(c *gin.Context) {
 	c.JSON(http.StatusAccepted, gin.H{"ok": true, "data": operation})
 }
 
+func (a *AdminService) validateBatchParameterValues(ctx context.Context, request model.ServiceInstanceBatchOperationRequest, instances []model.ServiceInstance) (int, error) {
+	if len(request.ParameterValuesByType) == 0 {
+		return http.StatusOK, nil
+	}
+	if request.Action == "stop" {
+		return http.StatusBadRequest, errors.New("停止实例不支持修改启动参数")
+	}
+	types, err := a.app.ListServiceTypes(ctx)
+	if err != nil {
+		return http.StatusServiceUnavailable, err
+	}
+	fieldsByType := make(map[string][]model.ServiceParameterField, len(types))
+	for _, item := range types {
+		fieldsByType[item.ID] = item.ParameterFields
+	}
+	selectedTypes := make(map[string]struct{})
+	for _, item := range instances {
+		selectedTypes[item.ServiceTypeID] = struct{}{}
+		if values := request.ParameterValuesByType[item.ServiceTypeID]; len(values) > 0 {
+			if _, err := servicetype.MergeParameterValues(fieldsByType[item.ServiceTypeID], item.Params, values); err != nil {
+				return http.StatusBadRequest, fmt.Errorf("实例 %s：%w", item.Name, err)
+			}
+		}
+	}
+	for typeID := range request.ParameterValuesByType {
+		if _, selected := selectedTypes[typeID]; !selected {
+			return http.StatusBadRequest, errors.New("启动参数包含未选中的服务类型")
+		}
+	}
+	return http.StatusOK, nil
+}
+
 func (a *AdminService) authorizeBatchInstances(c *gin.Context, ids []string) ([]model.ServiceInstance, int, error) {
 	if len(ids) == 0 {
 		return nil, http.StatusBadRequest, errors.New("请选择至少一个服务实例")
@@ -377,14 +433,6 @@ func (a *AdminService) authorizeBatchInstances(c *gin.Context, ids []string) ([]
 	instances, err := a.app.ListInstances(c.Request.Context())
 	if err != nil {
 		return nil, http.StatusServiceUnavailable, err
-	}
-	types, err := a.app.ListServiceTypes(c.Request.Context())
-	if err != nil {
-		return nil, http.StatusServiceUnavailable, err
-	}
-	projectByType := make(map[string]string, len(types))
-	for _, item := range types {
-		projectByType[item.ID] = item.ProjectID
 	}
 	instanceByID := make(map[string]model.ServiceInstance, len(instances))
 	for _, item := range instances {
@@ -402,11 +450,7 @@ func (a *AdminService) authorizeBatchInstances(c *gin.Context, ids []string) ([]
 		if !exists {
 			return nil, http.StatusNotFound, errors.New("服务实例不存在")
 		}
-		projectID, exists := projectByType[item.ServiceTypeID]
-		if !exists {
-			return nil, http.StatusNotFound, errors.New("服务实例所属项目不存在")
-		}
-		if user.Role != model.RoleAdmin && !user.HasProject(projectID) {
+		if user.Role != model.RoleAdmin && !user.HasProject(item.ProjectID) {
 			return nil, http.StatusForbidden, errors.New("批量操作只能包含已授权项目的服务实例")
 		}
 		selected = append(selected, item)

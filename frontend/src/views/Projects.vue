@@ -5,7 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Edit, Delete, FolderOpened, Key, Close, View, Monitor } from '@element-plus/icons-vue'
 import { useAuthStore } from '../stores/auth'
 import { projectApi, type Project, type ProjectForm } from '../api/projects'
-import { serviceApi } from '../api/services'
+import { instanceApi } from '../api/instances'
 import { hostApi, type Host } from '../api/hosts'
 import AppLayout from '../components/AppLayout.vue'
 
@@ -29,14 +29,16 @@ const form = reactive<ProjectForm>({ name: '', note: '', env_vars: '' })
 async function loadAll() {
   loading.value = true
   try {
-    const [availableProjects, serviceTypes, availableHosts] = await Promise.all([projectApi.list(), serviceApi.list(), hostApi.list()])
+    const [availableProjects, serviceInstances, availableHosts] = await Promise.all([projectApi.list(), instanceApi.list(), hostApi.list()])
     projects.value = availableProjects
     hosts.value = availableHosts
-    const counts: Record<string, number> = {}
-    for (const type of serviceTypes) {
-      counts[type.project_id] = (counts[type.project_id] || 0) + 1
+    const typesByProject = new Map<string, Set<string>>()
+    for (const item of serviceInstances) {
+      const ids = typesByProject.get(item.project_id) || new Set<string>()
+      ids.add(item.service_type_id)
+      typesByProject.set(item.project_id, ids)
     }
-    serviceCountByProject.value = counts
+    serviceCountByProject.value = Object.fromEntries([...typesByProject].map(([id, ids]) => [id, ids.size]))
   } catch {
     ElMessage.error('项目列表加载失败')
   } finally {
@@ -141,12 +143,9 @@ async function saveProjectDetail() {
 }
 
 async function remove(project: Project) {
-  const relatedCount = serviceCountByProject.value[project.id] || 0
   try {
     await ElMessageBox.confirm(
-      relatedCount > 0
-        ? `项目"${project.name}"下还有 ${relatedCount} 个服务类型，删除项目不会自动删除它们，但会失去项目分类。是否继续？`
-        : `确定删除项目"${project.name}"吗？`,
+      `确定删除项目"${project.name}"吗？仍有部署主机或服务实例的项目不能删除。`,
       '删除确认',
       { type: 'warning' },
     )

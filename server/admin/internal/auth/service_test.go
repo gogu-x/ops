@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/gogu-x/ops/admin/internal/store"
 	"github.com/gogu-x/ops/conf"
 	"github.com/gogu-x/ops/model"
 	"golang.org/x/crypto/bcrypt"
@@ -14,7 +13,7 @@ func TestLoginRefreshAndLogout(t *testing.T) {
 	conf.JWTSecret = "test-secret"
 	conf.AccessTTLMin = 15
 	conf.RefreshTTLDays = 7
-	repo := store.NewMemoryRepository()
+	repo := users.NewMemoryRepository()
 	service := NewService(repo)
 	if err := service.Bootstrap(context.Background()); err != nil {
 		t.Fatal(err)
@@ -25,7 +24,7 @@ func TestLoginRefreshAndLogout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.CreateUser(context.Background(), store.NewUser("tester", string(hash), "admin")); err != nil {
+	if err := repo.CreateUser(context.Background(), users.NewUser("tester", string(hash), "admin")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -60,7 +59,7 @@ func TestManagedUsersRequireScopeAndProtectLastAdmin(t *testing.T) {
 	conf.AccessTTLMin = 15
 	conf.RefreshTTLDays = 7
 	ctx := context.Background()
-	repo := store.NewMemoryRepository()
+	repo := users.NewMemoryRepository()
 	service := NewService(repo)
 	if err := service.Bootstrap(ctx); err != nil {
 		t.Fatal(err)

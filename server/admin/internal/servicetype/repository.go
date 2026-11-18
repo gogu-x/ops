@@ -1,16 +1,14 @@
-package service
+package servicetype
 
 import (
 	"context"
 	"errors"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/gogu-x/ops/model"
-	"github.com/google/uuid"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 var ErrNotFound = errors.New("service type not found")
@@ -24,77 +22,18 @@ type Repository interface {
 	Delete(ctx context.Context, id string) error
 }
 
-type MemoryRepository struct {
-	mu    sync.RWMutex
-	items map[string]model.ServiceType
-}
-
-func NewMemoryRepository() *MemoryRepository {
-	return &MemoryRepository{items: make(map[string]model.ServiceType)}
-}
-
-func (r *MemoryRepository) List(context.Context) ([]model.ServiceType, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	result := make([]model.ServiceType, 0, len(r.items))
-	for _, item := range r.items {
-		result = append(result, item)
-	}
-	return result, nil
-}
-
-func (r *MemoryRepository) Get(_ context.Context, id string) (model.ServiceType, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	item, ok := r.items[id]
-	if !ok {
-		return model.ServiceType{}, ErrNotFound
-	}
-	return item, nil
-}
-
-func (r *MemoryRepository) Create(_ context.Context, item model.ServiceType) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for _, existing := range r.items {
-		if existing.ProjectID == item.ProjectID && existing.EnvironmentID == item.EnvironmentID && existing.Name == item.Name {
-			return ErrAlreadyExists
-		}
-	}
-	r.items[item.ID] = item
-	return nil
-}
-
-func (r *MemoryRepository) Update(_ context.Context, item model.ServiceType) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if _, ok := r.items[item.ID]; !ok {
-		return ErrNotFound
-	}
-	for id, existing := range r.items {
-		if id != item.ID && existing.ProjectID == item.ProjectID && existing.EnvironmentID == item.EnvironmentID && existing.Name == item.Name {
-			return ErrAlreadyExists
-		}
-	}
-	r.items[item.ID] = item
-	return nil
-}
-
-func (r *MemoryRepository) Delete(_ context.Context, id string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if _, ok := r.items[id]; !ok {
-		return ErrNotFound
-	}
-	delete(r.items, id)
-	return nil
-}
-
 type MongoRepository struct{ db *mongo.Database }
 
 func NewMongoRepository(db *mongo.Database) *MongoRepository { return &MongoRepository{db: db} }
 
 func (r *MongoRepository) collection() *mongo.Collection { return r.db.Collection("service_types") }
+
+func (r *MongoRepository) EnsureIndexes(ctx context.Context) error {
+	_, err := r.collection().Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "name", Value: 1}}, Options: options.Index().SetUnique(true),
+	})
+	return err
+}
 
 func (r *MongoRepository) List(ctx context.Context) ([]model.ServiceType, error) {
 	var result []model.ServiceType
@@ -151,9 +90,4 @@ func (r *MongoRepository) Delete(ctx context.Context, id string) error {
 		return ErrNotFound
 	}
 	return nil
-}
-
-func NewServiceType(projectID, environmentID, name string) model.ServiceType {
-	now := time.Now().UTC()
-	return model.ServiceType{ID: uuid.NewString(), ProjectID: projectID, EnvironmentID: environmentID, Name: name, CreatedAt: now, UpdatedAt: now}
 }

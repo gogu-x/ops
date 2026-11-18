@@ -1,6 +1,5 @@
 import type { ServiceInstance, InstanceStatus } from '../api/instances'
 import type { Host } from '../api/hosts'
-import type { ServiceType } from '../api/services'
 import type { Environment } from '../api/environments'
 import type { Project } from '../api/projects'
 
@@ -25,19 +24,18 @@ export function hostHasProject(host: Host, projectId: string): boolean {
   return host.project_id === projectId || host.project_ids?.includes(projectId) === true
 }
 
-export function scopeInstances(instances: ServiceInstance[], types: ServiceType[], projectId: string): ServiceInstance[] {
+export function scopeInstances(instances: ServiceInstance[], projectId: string): ServiceInstance[] {
   if (!projectId) return instances
-  const ids = new Set(types.filter((type) => type.project_id === projectId).map((type) => type.id))
-  return instances.filter((instance) => ids.has(instance.service_type_id))
+  return instances.filter((instance) => instance.project_id === projectId)
 }
 
 export function statusCounts(instances: ServiceInstance[]) {
   return statusDefinitions.map((item) => ({ ...item, count: instances.filter((instance) => normalizedStatus(instance) === item.key).length }))
 }
 
-export function projectOverview(projects: Project[], environments: Environment[], types: ServiceType[], instances: ServiceInstance[], hosts: Host[]) {
+export function projectOverview(projects: Project[], environments: Environment[], instances: ServiceInstance[], hosts: Host[]) {
   return projects.map((project) => {
-    const related = scopeInstances(instances, types, project.id)
+    const related = scopeInstances(instances, project.id)
     const running = related.filter((instance) => normalizedStatus(instance) === 'running').length
     return {
       ...project,

@@ -20,6 +20,9 @@ const permissionEditing = ref(false)
 const activePermissionUser = ref<ManagedUser | null>(null)
 const passwordForm = reactive({ password: '' })
 const form = reactive<UserAccessForm & { password: string }>({ username: '', role: 'user', project_ids: [], permissions: [], disabled: false, password: '' })
+const projectScopeRequired = computed(() => form.permissions.some(permission =>
+  permission !== 'service_types.view' && permission !== 'service_types.manage',
+))
 const permissionTreeRef = ref<any>()
 const permissionTreeProps = { label: 'label', children: 'children' }
 
@@ -28,7 +31,10 @@ const permissionOptions: { value: UserPermission; label: string; description: st
   { value: 'dashboard.view', label: '查看控制台', description: '查看首页运行概况和统计信息' },
   { value: 'projects.view', label: '查看项目', description: '查看授权项目及环境概况' },
   { value: 'services.view', label: '查看服务', description: '查看实例、镜像、运行状态、日志和事件' },
-  { value: 'services.manage', label: '管理服务', description: '部署、编辑、更新镜像及控制容器' },
+  { value: 'services.manage', label: '管理服务', description: '在授权项目内部署、更新镜像、批量操作及滚动发布' },
+  { value: 'service_types.view', label: '查看全局服务类型', description: '查看服务类型、启动参数表单和健康检查' },
+  { value: 'service_types.manage', label: '管理全局服务类型', description: '新增、修改和删除所有项目共用的服务类型' },
+  { value: 'rollout_templates.manage', label: '管理全局发布模板', description: '创建全局发布和健康检测模板，需同时授予管理服务权限' },
   { value: 'hosts.view', label: '查看主机', description: '查看授权项目关联的主机信息' },
   { value: 'hosts.manage', label: '管理主机', description: '配置或删除主机并测试连接' },
 ]
@@ -46,7 +52,18 @@ const permissionTree = [
   {
     id: 'services', label: '服务管理', description: '实例、镜像及运行操作', children: [
       { id: 'services.view', label: '查看服务', description: '查看实例、镜像、运行状态、日志和事件' },
-      { id: 'services.manage', label: '管理服务', description: '部署、更新镜像及控制容器' },
+      { id: 'services.manage', label: '管理服务', description: '在授权项目内部署、更新镜像、批量操作及滚动发布' },
+    ],
+  },
+  {
+    id: 'service_types', label: '服务类型', description: '所有项目共用的服务类型配置', children: [
+      { id: 'service_types.view', label: '查看全局服务类型', description: '查看服务类型、启动参数表单和健康检查' },
+      { id: 'service_types.manage', label: '管理全局服务类型', description: '新增、修改和删除所有项目共用的服务类型' },
+    ],
+  },
+  {
+    id: 'rollout_templates', label: '发布模板', description: '所有项目共用的发布模板', children: [
+      { id: 'rollout_templates.manage', label: '管理全局发布模板', description: '创建全局发布和健康检测模板，需同时授予管理服务权限' },
     ],
   },
   {
@@ -120,8 +137,12 @@ async function loadAll() {
 async function saveUser() {
   if (!form.username.trim()) { ElMessage.warning('请输入用户名'); return }
   if (!editingUserId.value && form.password.length < 8) { ElMessage.warning('初始密码至少需要 8 位'); return }
-  if (form.role === 'user' && !form.project_ids.length) { ElMessage.warning('请至少分配一个项目'); return }
   if (form.role === 'user' && !form.permissions.length) { ElMessage.warning('请至少授予一项功能权限'); return }
+  if (form.role === 'user' && form.permissions.includes('rollout_templates.manage') && !form.permissions.includes('services.manage')) {
+    ElMessage.warning('管理全局发布模板需要同时授予管理服务权限')
+    return
+  }
+  if (form.role === 'user' && projectScopeRequired.value && !form.project_ids.length) { ElMessage.warning('请至少分配一个项目'); return }
   saving.value = true
   try {
     const payload = { ...form, username: form.username.trim(), project_ids: form.role === 'admin' ? [] : form.project_ids, permissions: form.role === 'admin' ? [] : form.permissions }
@@ -185,10 +206,10 @@ onMounted(loadAll)
           <el-form-item label="账号状态"><div class="switch-control"><el-switch v-model="form.disabled" active-text="停用账号" inactive-text="正常使用" /><span class="switch-hint">{{ form.disabled ? '该用户无法登录控制台' : '账号可正常登录并使用授权功能' }}</span></div></el-form-item>
         </div>
         <template v-if="form.role === 'user'">
-          <div class="access-section-heading"><span class="section-index">01</span><span><b>项目访问范围</b><small>先选择该用户可以访问的数据项目</small></span></div>
-          <el-form-item label="可访问项目" required class="project-scope-item"><div class="scope-field"><el-select v-model="form.project_ids" multiple filterable collapse-tags collapse-tags-tooltip placeholder="选择该用户可访问的项目" style="width: 100%"><el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" /></el-select><div class="form-hint"><el-icon><Key /></el-icon> 项目范围会同步限制项目、服务和主机数据的可见范围。</div></div></el-form-item>
+          <div class="access-section-heading"><span class="section-index">01</span><span><b>项目访问范围</b><small>限制可访问的项目、服务实例和主机</small></span></div>
+          <el-form-item label="可访问项目" :required="projectScopeRequired" class="project-scope-item"><div class="scope-field"><el-select v-model="form.project_ids" multiple filterable collapse-tags collapse-tags-tooltip placeholder="选择该用户可访问的项目" style="width: 100%"><el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" /></el-select><div class="form-hint"><el-icon><Key /></el-icon> 仅授予全局服务类型权限时，可不分配项目。</div></div></el-form-item>
           <div class="access-section-heading permission-section-heading"><span class="section-index">02</span><span><b>功能权限</b><small>按模块勾选可查看或管理的功能</small></span></div>
-          <el-form-item label="功能权限" class="permission-tree-item"><div class="permission-tree-panel"><div class="tree-panel-heading"><div><b>授权权限树</b><span>新增用户默认未授权，展开模块后选择具体权限。</span></div><span class="selected-count">已选 {{ form.permissions.length }} 项</span></div><el-tree ref="permissionTreeRef" :key="`${editingUserId || 'new'}-${dialogVisible}`" :data="permissionTree" node-key="id" :props="permissionTreeProps" :default-checked-keys="form.permissions" :check-strictly="false" :default-expand-all="false" :expand-on-click-node="false" show-checkbox class="permission-tree" @check="onPermissionCheck"><template #default="{ data }"><span class="permission-tree-label" :class="{ 'is-module': data.children }"><span class="tree-node-icon"><el-icon><FolderOpened v-if="data.children" /><Key v-else /></el-icon></span><span class="tree-node-copy"><b>{{ data.label }}</b></span><el-tag v-if="data.id.endsWith('.manage')" size="small" type="warning" effect="light">管理</el-tag><el-tag v-else-if="!data.children" size="small" type="info" effect="plain">查看</el-tag></span></template></el-tree></div></el-form-item>
+          <el-form-item label="功能权限" class="permission-tree-item"><div class="permission-tree-panel"><div class="tree-panel-heading"><div><b>授权权限树</b><span>新增用户默认未授权，展开模块后选择具体权限。</span></div><span class="selected-count">已选 {{ form.permissions.length }} 项</span></div><el-tree ref="permissionTreeRef" :key="`${editingUserId || 'new'}-${dialogVisible}`" :data="permissionTree" node-key="id" :props="permissionTreeProps" :default-checked-keys="form.permissions" :check-strictly="false" :default-expand-all="false" :expand-on-click-node="false" show-checkbox class="permission-tree" @check="onPermissionCheck"><template #default="{ data }"><span class="permission-tree-label" :class="{ 'is-module': data.children }" :title="data.description"><span class="tree-node-icon"><el-icon><FolderOpened v-if="data.children" /><Key v-else /></el-icon></span><span class="tree-node-copy"><b>{{ data.label }}</b></span><el-tag v-if="data.id.endsWith('.manage')" size="small" type="warning" effect="light">管理</el-tag><el-tag v-else-if="!data.children" size="small" type="info" effect="plain">查看</el-tag></span></template></el-tree></div></el-form-item>
         </template>
         <div v-else class="admin-notice"><span class="admin-notice-icon"><el-icon><Key /></el-icon></span><span><b>平台管理员</b><small>拥有全部项目范围及项目、服务、主机的全部权限。</small></span><el-tag type="success" effect="light">全部授权</el-tag></div>
       </el-form>
@@ -213,9 +234,9 @@ onMounted(loadAll)
           <el-form-item label="账号状态"><div class="switch-control"><el-switch v-model="form.disabled" active-text="停用账号" inactive-text="正常使用" /></div></el-form-item>
           <template v-if="form.role === 'user'">
             <div class="detail-section-title permission-detail-section">项目范围</div>
-            <el-form-item label="可访问项目"><el-select v-model="form.project_ids" multiple filterable collapse-tags collapse-tags-tooltip placeholder="选择该用户可访问的项目" style="width: 100%"><el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" /></el-select></el-form-item>
+            <el-form-item label="可访问项目" :required="projectScopeRequired"><el-select v-model="form.project_ids" multiple filterable collapse-tags collapse-tags-tooltip placeholder="选择该用户可访问的项目" style="width: 100%"><el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" /></el-select></el-form-item>
             <div class="detail-section-title permission-detail-section">功能权限</div>
-            <div class="permission-tree-panel drawer-permission-tree"><div class="tree-panel-heading"><div><b>授权权限树</b><span>按需勾选模块权限</span></div><span class="selected-count">已选 {{ form.permissions.length }} 项</span></div><el-tree ref="permissionTreeRef" :key="`${editingUserId}-${permissionEditing}`" :data="permissionTree" node-key="id" :props="permissionTreeProps" :default-checked-keys="form.permissions" :check-strictly="false" :default-expand-all="false" :expand-on-click-node="false" show-checkbox class="permission-tree" @check="onPermissionCheck"><template #default="{ data }"><span class="permission-tree-label" :class="{ 'is-module': data.children }"><span class="tree-node-icon"><el-icon><FolderOpened v-if="data.children" /><Key v-else /></el-icon></span><span class="tree-node-copy"><b>{{ data.label }}</b></span><el-tag v-if="data.id.endsWith('.manage')" size="small" type="warning" effect="light">管理</el-tag><el-tag v-else-if="!data.children" size="small" type="info" effect="plain">查看</el-tag></span></template></el-tree></div>
+            <div class="permission-tree-panel drawer-permission-tree"><div class="tree-panel-heading"><div><b>授权权限树</b><span>按需勾选模块权限</span></div><span class="selected-count">已选 {{ form.permissions.length }} 项</span></div><el-tree ref="permissionTreeRef" :key="`${editingUserId}-${permissionEditing}`" :data="permissionTree" node-key="id" :props="permissionTreeProps" :default-checked-keys="form.permissions" :check-strictly="false" :default-expand-all="false" :expand-on-click-node="false" show-checkbox class="permission-tree" @check="onPermissionCheck"><template #default="{ data }"><span class="permission-tree-label" :class="{ 'is-module': data.children }" :title="data.description"><span class="tree-node-icon"><el-icon><FolderOpened v-if="data.children" /><Key v-else /></el-icon></span><span class="tree-node-copy"><b>{{ data.label }}</b></span><el-tag v-if="data.id.endsWith('.manage')" size="small" type="warning" effect="light">管理</el-tag><el-tag v-else-if="!data.children" size="small" type="info" effect="plain">查看</el-tag></span></template></el-tree></div>
           </template>
           <div v-else class="admin-notice drawer-admin-notice"><span class="admin-notice-icon"><el-icon><Key /></el-icon></span><span><b>平台管理员</b><small>拥有全部项目范围及功能权限。</small></span><el-tag type="success" effect="light">全部授权</el-tag></div>
         </el-form>
