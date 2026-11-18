@@ -29,13 +29,10 @@ func main() {
 				return nil
 			}
 
-			actors := make([]tree.Actor, 0, 4)
-			actors = append(actors,
-				admin.NewAdminService(mongodbData),
+			tree.Spawn(admin.NewAdminService(mongodbData),
 				host.NewHostService(mongodbData),
 				instance.NewInstanceService(mongodbData),
 			)
-			tree.Spawn(actors...)
 			tree.Start()
 			return nil
 		},
