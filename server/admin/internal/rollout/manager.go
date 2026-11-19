@@ -23,17 +23,16 @@ const (
 )
 
 type Manager struct {
-	repo     Repository
-	app      *application.Service
-	workerID string
-	ctx      context.Context
-	cancel   context.CancelFunc
-	wake     chan struct{}
-	started  sync.Once
+	repo    Repository
+	app     *application.Service
+	ctx     context.Context
+	cancel  context.CancelFunc
+	wake    chan struct{}
+	started sync.Once
 }
 
 func NewManager(repo Repository, app *application.Service) *Manager {
-	return &Manager{repo: repo, app: app, workerID: uuid.NewString(), wake: make(chan struct{}, 1)}
+	return &Manager{repo: repo, app: app, wake: make(chan struct{}, 1)}
 }
 
 func (m *Manager) Start() error {
@@ -73,45 +72,14 @@ func (m *Manager) Create(job model.RolloutJob, items []model.RolloutItem) (model
 	job.CreatedAt = time.Now().UTC()
 	job.UpdatedAt = job.CreatedAt
 	job.Groups = normalizeRolloutGroups(job.Groups, job.MaxParallelPerGroup, job.MaxUnavailablePerGroup)
-	owner, acquired, err := m.repo.AcquireRolloutSlot(ctx, job.ID)
-	if err != nil {
-		return model.RolloutJob{}, err
-	}
-	if !acquired {
-		old, getErr := m.repo.Get(ctx, owner)
-		if getErr == nil {
-			if !rolloutTerminal(old.Status) {
-				return model.RolloutJob{}, errors.New("已有滚动发布任务运行或暂停中，请先完成它")
-			}
-		} else if !errors.Is(getErr, model.ErrNotFound) {
-			return model.RolloutJob{}, getErr
-		}
-		if err := m.repo.ReleaseRolloutSlot(ctx, owner); err != nil {
-			return model.RolloutJob{}, err
-		}
-		if _, acquired, err = m.repo.AcquireRolloutSlot(ctx, job.ID); err != nil || !acquired {
-			if err != nil {
-				return model.RolloutJob{}, err
-			}
-			return model.RolloutJob{}, errors.New("已有滚动发布任务正在创建")
-		}
-	}
-	ids := make([]string, 0, len(items))
 	for i := range items {
 		items[i].ID = uuid.NewString()
 		items[i].JobID = job.ID
 		items[i].Status = "pending"
 		items[i].UpdatedAt = job.CreatedAt
-		ids = append(ids, items[i].InstanceID)
-	}
-	if err := m.repo.AcquireInstanceLocks(ctx, rolloutLockOwner(job.ID), ids); err != nil {
-		_ = m.repo.ReleaseRolloutSlot(ctx, job.ID)
-		return model.RolloutJob{}, err
 	}
 	event := rolloutEvent(job.ID, "", job.Operator, "created", fmt.Sprintf("创建滚动发布任务，目标 %d 个实例", len(items)))
 	if err := m.repo.Create(ctx, job, items, event); err != nil {
-		_ = m.repo.ReleaseInstanceLocks(ctx, rolloutLockOwner(job.ID))
-		_ = m.repo.ReleaseRolloutSlot(ctx, job.ID)
 		return model.RolloutJob{}, err
 	}
 	m.signal()
@@ -128,10 +96,6 @@ func normalizeRolloutGroups(groups []model.RolloutGroupPlan, maxParallel, maxUna
 		}
 	}
 	return groups
-}
-
-func rolloutTerminal(status string) bool {
-	return status == "succeeded" || status == "partial" || status == "failed"
 }
 
 func (m *Manager) Detail(id string) (model.RolloutDetail, error) {
@@ -193,14 +157,10 @@ func (m *Manager) List(projectIDs []string, limit int) ([]model.RolloutJob, erro
 }
 
 func (m *Manager) Pause(id, operator, reason string) error {
-	job, err := m.repo.Get(context.Background(), id)
-	if err != nil {
-		return err
-	}
-	if job.Status != "queued" && job.Status != "running" {
-		return errors.New("只有排队或运行中的任务可以暂停")
-	}
-	if err := m.repo.SetJobStatus(context.Background(), id, "paused", reason); err != nil {
+	if err := m.repo.SetJobStatus(context.Background(), id, "paused", reason, "queued", "running"); err != nil {
+		if errors.Is(err, errRolloutStateChanged) {
+			return errors.New("只有排队或运行中的任务可以暂停")
+		}
 		return err
 	}
 	_ = m.repo.AppendEvent(context.Background(), rolloutEvent(id, "", operator, "paused", firstNonEmpty(reason, "操作员暂停任务")))
@@ -208,17 +168,21 @@ func (m *Manager) Pause(id, operator, reason string) error {
 }
 
 func (m *Manager) Resume(id, operator string) error {
-	job, err := m.repo.Get(context.Background(), id)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	owner := uuid.NewString()
+	err := m.repo.LeaseInactiveJob(ctx, id, owner, time.Now().UTC().Add(10*time.Second), "paused")
 	if err != nil {
+		if errors.Is(err, errRolloutStateChanged) {
+			return errors.New("只有暂停且已结束当前实例操作的任务可以恢复")
+		}
 		return err
 	}
-	if job.Status != "paused" {
-		return errors.New("只有暂停中的任务可以恢复")
-	}
-	if err := m.repo.SetJobStatus(context.Background(), id, "queued", ""); err != nil {
+	defer m.releaseLease(id, owner, time.Time{})
+	if err := m.repo.SetJobStatus(ctx, id, "queued", "", "paused"); err != nil {
 		return err
 	}
-	_ = m.repo.AppendEvent(context.Background(), rolloutEvent(id, "", operator, "resumed", "恢复滚动发布任务"))
+	_ = m.repo.AppendEvent(ctx, rolloutEvent(id, "", operator, "resumed", "恢复滚动发布任务"))
 	m.signal()
 	return nil
 }
@@ -226,17 +190,37 @@ func (m *Manager) Resume(id, operator string) error {
 func (m *Manager) RetryFailed(id, operator string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
+	owner := uuid.NewString()
+	err := m.repo.LeaseInactiveJob(ctx, id, owner, time.Now().UTC().Add(4*time.Minute), "paused", "partial", "failed")
+	if err != nil {
+		if errors.Is(err, errRolloutStateChanged) {
+			return errors.New("任务需暂停或完成，且已结束当前实例操作才能重试失败项")
+		}
+		return err
+	}
+	defer m.releaseLease(id, owner, time.Time{})
 	job, err := m.repo.Get(ctx, id)
 	if err != nil {
 		return err
-	}
-	if job.Status != "paused" && job.Status != "partial" && job.Status != "failed" {
-		return errors.New("任务需处于暂停或完成状态才能重试失败项")
 	}
 	items, err := m.repo.Items(ctx, id)
 	if err != nil {
 		return err
 	}
+	ids := make([]string, 0)
+	for _, item := range items {
+		if item.Status == "failed" {
+			ids = append(ids, item.InstanceID)
+		}
+	}
+	if len(ids) == 0 {
+		return errors.New("没有失败项可重试")
+	}
+	lockOwner := rolloutLockOwner(id, owner)
+	if err := m.repo.AcquireInstanceLocks(ctx, lockOwner, ids); err != nil {
+		return err
+	}
+	defer m.releaseInstanceLocks(lockOwner)
 	liveItems, err := m.app.ListInstancesStrict(ctx)
 	if err != nil {
 		return fmt.Errorf("读取实例状态以安全重试失败项: %w", err)
@@ -244,37 +228,6 @@ func (m *Manager) RetryFailed(id, operator string) error {
 	liveByID := make(map[string]model.ServiceInstance, len(liveItems))
 	for _, live := range liveItems {
 		liveByID[live.ID] = live
-	}
-	retried := 0
-	ids := make([]string, 0, len(items))
-	for _, item := range items {
-		if item.Status == "failed" {
-			retried++
-		}
-		ids = append(ids, item.InstanceID)
-	}
-	if retried == 0 {
-		return errors.New("没有失败项可重试")
-	}
-	acquiredLocks := job.Status != "paused"
-	committed := false
-	defer func() {
-		if acquiredLocks && !committed {
-			_ = m.repo.ReleaseInstanceLocks(context.Background(), rolloutLockOwner(id))
-			_ = m.repo.ReleaseRolloutSlot(context.Background(), id)
-		}
-	}()
-	if acquiredLocks {
-		if _, acquired, err := m.repo.AcquireRolloutSlot(ctx, id); err != nil || !acquired {
-			if err != nil {
-				return err
-			}
-			return errors.New("另一个滚动发布任务正在运行")
-		}
-		if err := m.repo.AcquireInstanceLocks(ctx, rolloutLockOwner(id), ids); err != nil {
-			_ = m.repo.ReleaseRolloutSlot(ctx, id)
-			return err
-		}
 	}
 	for _, item := range items {
 		if item.Status != "failed" {
@@ -296,11 +249,10 @@ func (m *Manager) RetryFailed(id, operator string) error {
 		}
 		_ = m.repo.AppendEvent(ctx, rolloutEvent(id, item.InstanceID, operator, eventType, eventMessage))
 	}
-	if err := m.repo.SetJobStatus(ctx, id, "queued", ""); err != nil {
+	if err := m.repo.SetJobStatus(ctx, id, "queued", "", job.Status); err != nil {
 		return err
 	}
-	committed = true
-	_ = m.repo.AppendEvent(ctx, rolloutEvent(id, "", operator, "retry_failed", fmt.Sprintf("重新排队 %d 个失败实例", retried)))
+	_ = m.repo.AppendEvent(ctx, rolloutEvent(id, "", operator, "retry_failed", fmt.Sprintf("重新排队 %d 个失败实例", len(ids))))
 	m.signal()
 	return nil
 }
@@ -328,7 +280,7 @@ func (m *Manager) signal() {
 
 func (m *Manager) claimAndRun(ctx context.Context) {
 	claimCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	job, ok, err := m.repo.ClaimNext(claimCtx, m.workerID, time.Now().UTC(), rolloutLeaseDuration)
+	job, ok, err := m.repo.ClaimNext(claimCtx, uuid.NewString(), time.Now().UTC(), rolloutLeaseDuration)
 	cancel()
 	if err != nil {
 		log.Printf("[ops] claim rollout job: %v", err)
@@ -340,12 +292,89 @@ func (m *Manager) claimAndRun(ctx context.Context) {
 	m.process(ctx, job)
 }
 
+func (m *Manager) refreshPendingPlan(ctx context.Context, job *model.RolloutJob, items []model.RolloutItem) error {
+	if len(items) == 0 {
+		return nil
+	}
+	for _, item := range items {
+		if item.Attempt > 0 || item.Status != "pending" {
+			return nil
+		}
+	}
+	// A job may have been queued while another rollout was changing availability.
+	types, err := m.app.ListServiceTypes(ctx)
+	if err != nil {
+		return err
+	}
+	hosts, err := m.app.ListHosts()
+	if err != nil {
+		return err
+	}
+	live, err := m.app.ListInstancesStrict(ctx)
+	if err != nil {
+		return err
+	}
+	typeByID := make(map[string]model.ServiceType, len(types))
+	for _, serviceType := range types {
+		typeByID[serviceType.ID] = serviceType
+	}
+	hostByID := make(map[string]model.Host, len(hosts))
+	for _, host := range hosts {
+		hostByID[host.ID] = host
+	}
+	liveByID := make(map[string]model.ServiceInstance, len(live))
+	for _, instance := range live {
+		liveByID[instance.ID] = instance
+	}
+	groups, _ := BuildPlan(model.CreateRolloutRequest{}, job.ProjectID, nil, live, typeByID, hostByID)
+	unavailable := make(map[string]int, len(groups))
+	for _, group := range groups {
+		unavailable[group.Key] = group.InitialUnavailable
+	}
+	job.Groups = append([]model.RolloutGroupPlan(nil), job.Groups...)
+	groupsChanged := false
+	for i := range job.Groups {
+		group := &job.Groups[i]
+		if count := unavailable[group.Key]; group.InitialUnavailable != count {
+			group.InitialUnavailable = count
+			groupsChanged = true
+		}
+	}
+	for i := range items {
+		item := &items[i]
+		instance, exists := liveByID[item.InstanceID]
+		if !exists {
+			return fmt.Errorf("实例 %s 已不存在", item.Name)
+		}
+		serviceType, exists := typeByID[instance.ServiceTypeID]
+		key, _ := rolloutGroup(instance, serviceType, hostByID[instance.HostID])
+		if !exists || key != item.GroupKey {
+			return fmt.Errorf("实例 %s 的发布分组已变更，请重新创建任务", item.Name)
+		}
+		available := instance.Status == model.StatusRunning
+		if item.InitiallyAvailable == available && item.PreviousContainerID == instance.ContainerID && item.PreviousImage == instance.Image {
+			continue
+		}
+		item.InitiallyAvailable = available
+		item.PreviousContainerID = instance.ContainerID
+		item.PreviousImage = instance.Image
+		if err := m.repo.UpdateItem(ctx, *item); err != nil {
+			return err
+		}
+	}
+	if groupsChanged {
+		return m.repo.SetJobGroups(ctx, job.ID, job.Groups)
+	}
+	return nil
+}
+
 func (m *Manager) process(ctx context.Context, job model.RolloutJob) {
 	jobCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	workCtx, cancelWork := context.WithCancel(jobCtx)
 	defer cancelWork()
 	heartbeatDone := make(chan struct{})
+	var retryAt time.Time
 	go func() {
 		defer close(heartbeatDone)
 		ticker := time.NewTicker(10 * time.Second)
@@ -355,7 +384,7 @@ func (m *Manager) process(ctx context.Context, job model.RolloutJob) {
 			case <-jobCtx.Done():
 				return
 			case <-ticker.C:
-				if err := m.repo.RenewLease(jobCtx, job.ID, m.workerID, time.Now().UTC().Add(rolloutLeaseDuration)); err != nil {
+				if err := m.repo.RenewLease(jobCtx, job.ID, job.LeaseOwner, time.Now().UTC().Add(rolloutLeaseDuration)); err != nil {
 					log.Printf("[ops] renew rollout lease %s: %v", job.ID, err)
 					cancel()
 					return
@@ -366,14 +395,50 @@ func (m *Manager) process(ctx context.Context, job model.RolloutJob) {
 	defer func() {
 		cancel()
 		<-heartbeatDone
-		if ctx.Err() == nil {
-			_ = m.repo.ReleaseLease(context.Background(), job.ID, m.workerID)
-		}
+		m.releaseLease(job.ID, job.LeaseOwner, retryAt)
 	}()
 
 	items, err := m.repo.Items(jobCtx, job.ID)
 	if err != nil {
 		m.pause(job.ID, job.Operator, "读取任务实例失败: "+err.Error())
+		return
+	}
+	if len(items) > 0 {
+		ids := make([]string, 0, len(items))
+		groups := make(map[string]struct{})
+		for _, item := range items {
+			ids = append(ids, item.InstanceID)
+			if _, exists := groups[item.GroupKey]; !exists && item.GroupKey != "" {
+				groups[item.GroupKey] = struct{}{}
+				ids = append(ids, "@rollout-group:"+item.GroupKey)
+			}
+		}
+		lockOwner := rolloutLockOwner(job.ID, job.LeaseOwner)
+		if err := m.repo.AcquireInstanceLocks(jobCtx, lockOwner, ids); err != nil {
+			if errors.Is(err, errRolloutLocked) {
+				if m.repo.SetJobStatus(jobCtx, job.ID, "queued", "", "running") == nil {
+					retryAt = time.Now().UTC().Add(rolloutPollInterval)
+				}
+			} else if jobCtx.Err() == nil {
+				m.pause(job.ID, job.Operator, "锁定发布实例失败: "+err.Error())
+			}
+			return
+		}
+		defer m.releaseInstanceLocks(lockOwner)
+	}
+	var workers sync.WaitGroup
+	defer func() {
+		cancelWork()
+		workers.Wait()
+	}()
+	current, err := m.repo.Get(jobCtx, job.ID)
+	if err != nil || current.Status != "running" || current.LeaseOwner != job.LeaseOwner {
+		return
+	}
+	if err := m.refreshPendingPlan(jobCtx, &job, items); err != nil {
+		if jobCtx.Err() == nil {
+			m.pause(job.ID, job.Operator, "刷新发布前实例状态失败: "+err.Error())
+		}
 		return
 	}
 	// A process may have stopped after marking an item active. Requeue those items;
@@ -404,7 +469,6 @@ func (m *Manager) process(ctx context.Context, job model.RolloutJob) {
 	for _, group := range job.Groups {
 		groupByKey[group.Key] = group
 	}
-	var workers sync.WaitGroup
 	for _, item := range recoveredChecks {
 		workers.Add(1)
 		go func(item model.RolloutItem) {
@@ -414,26 +478,15 @@ func (m *Manager) process(ctx context.Context, job model.RolloutJob) {
 	}
 	for {
 		if jobCtx.Err() != nil {
-			cancelWork()
-			workers.Wait()
 			return
 		}
 		current, err := m.repo.Get(jobCtx, job.ID)
-		if err != nil {
-			cancelWork()
-			workers.Wait()
-			return
-		}
-		if current.Status == "paused" {
-			cancelWork()
-			workers.Wait()
+		if err != nil || current.Status != "running" || current.LeaseOwner != job.LeaseOwner {
 			return
 		}
 		items, err = m.repo.Items(jobCtx, job.ID)
 		if err != nil {
 			m.pause(job.ID, job.Operator, "读取任务进度失败: "+err.Error())
-			cancelWork()
-			workers.Wait()
 			return
 		}
 		m.refreshProgress(job.ID, items)
@@ -534,7 +587,6 @@ func (m *Manager) process(ctx context.Context, job model.RolloutJob) {
 		}
 		select {
 		case <-jobCtx.Done():
-			workers.Wait()
 			return
 		case <-time.After(time.Second):
 		}
@@ -575,7 +627,9 @@ func (m *Manager) runItem(ctx context.Context, job model.RolloutJob, item model.
 		err = fmt.Errorf("unsupported rollout action %q", job.Action)
 	}
 	if err != nil {
-		m.failItem(job, item, "执行操作失败: "+err.Error())
+		if ctx.Err() == nil {
+			m.failItem(job, item, "执行操作失败: "+err.Error())
+		}
 		return
 	}
 	item.Status = "health_check"
@@ -600,6 +654,9 @@ func (m *Manager) verifyItem(ctx context.Context, job model.RolloutJob, item mod
 			return
 		}
 		ready, reason, probeErr := m.app.InstanceReadiness(ctx, item.InstanceID, item.ReadinessProbe)
+		if ctx.Err() != nil {
+			return
+		}
 		if probeErr != nil {
 			reason = probeErr.Error()
 		}
@@ -634,7 +691,7 @@ func (m *Manager) verifyItem(ctx context.Context, job model.RolloutJob, item mod
 }
 
 func (m *Manager) failItem(job model.RolloutJob, item model.RolloutItem, reason string) {
-	_ = m.repo.SetJobStatus(context.Background(), job.ID, "paused", reason)
+	pauseErr := m.repo.SetJobStatus(context.Background(), job.ID, "paused", reason, "running")
 	item.Status = "failed"
 	item.Error = reason
 	item.FinishedAt = time.Now().UTC()
@@ -643,23 +700,41 @@ func (m *Manager) failItem(job model.RolloutJob, item model.RolloutItem, reason 
 		log.Printf("[ops] save failed rollout item %s: %v", item.InstanceID, err)
 	}
 	_ = m.repo.AppendEvent(context.Background(), rolloutEvent(job.ID, item.InstanceID, job.Operator, "instance_failed", reason))
-	_ = m.repo.AppendEvent(context.Background(), rolloutEvent(job.ID, "", job.Operator, "auto_paused", "实例失败，任务自动暂停: "+reason))
+	if pauseErr == nil {
+		_ = m.repo.AppendEvent(context.Background(), rolloutEvent(job.ID, "", job.Operator, "auto_paused", "实例失败，任务自动暂停: "+reason))
+	}
 	m.refreshProgress(job.ID, nil)
 }
 
 func (m *Manager) pause(id, operator, reason string) {
-	_ = m.repo.SetJobStatus(context.Background(), id, "paused", reason)
+	if err := m.repo.SetJobStatus(context.Background(), id, "paused", reason, "running"); err != nil {
+		return
+	}
 	_ = m.repo.AppendEvent(context.Background(), rolloutEvent(id, "", operator, "auto_paused", reason))
 }
 
 func (m *Manager) finish(id, operator, status string) {
-	if err := m.repo.SetJobStatus(context.Background(), id, status, ""); err != nil {
+	if err := m.repo.SetJobStatus(context.Background(), id, status, "", "running"); err != nil {
 		log.Printf("[ops] finish rollout job %s: %v", id, err)
 		return
 	}
 	_ = m.repo.AppendEvent(context.Background(), rolloutEvent(id, "", operator, status, "滚动发布任务完成"))
-	_ = m.repo.ReleaseInstanceLocks(context.Background(), rolloutLockOwner(id))
-	_ = m.repo.ReleaseRolloutSlot(context.Background(), id)
+}
+
+func (m *Manager) releaseLease(id, owner string, nextClaim time.Time) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := m.repo.ReleaseLease(ctx, id, owner, nextClaim); err != nil {
+		log.Printf("[ops] release rollout lease %s: %v", id, err)
+	}
+}
+
+func (m *Manager) releaseInstanceLocks(owner string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := m.repo.ReleaseInstanceLocks(ctx, owner); err != nil {
+		log.Printf("[ops] release rollout instance locks %s: %v", owner, err)
+	}
 }
 
 func (m *Manager) refreshProgress(id string, supplied []model.RolloutItem) {
@@ -689,7 +764,7 @@ func rolloutEvent(jobID, instanceID, operator, eventType, message string) model.
 	return model.RolloutAuditEvent{ID: uuid.NewString(), JobID: jobID, InstanceID: instanceID, Operator: operator, Type: eventType, Message: message, CreatedAt: time.Now().UTC()}
 }
 
-func rolloutLockOwner(id string) string { return "rollout:" + id }
+func rolloutLockOwner(id, leaseOwner string) string { return "rollout:" + id + ":" + leaseOwner }
 
 func sortedRolloutItems(items []model.RolloutItem) {
 	sort.Slice(items, func(i, j int) bool {
