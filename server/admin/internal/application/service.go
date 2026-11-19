@@ -412,6 +412,12 @@ func (s *Service) ListInstances(ctx context.Context) ([]model.ServiceInstance, e
 	return result.ServiceInstances, nil
 }
 
+// GetInstance returns the persisted instance record without enriching it with
+// live Docker state. Use this for metadata and authorization checks.
+func (s *Service) GetInstance(ctx context.Context, id string) (model.ServiceInstance, error) {
+	return s.instances.Get(ctx, id)
+}
+
 // ListInstancesStrict returns only live-enriched instance states. Rollout
 // planning uses this to avoid treating an unavailable status actor as a safe
 // snapshot for availability limits.

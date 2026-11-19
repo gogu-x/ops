@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -32,18 +33,16 @@ func allowEnvironment(c *gin.Context, a *AdminService, id string) bool {
 }
 
 func allowInstance(c *gin.Context, a *AdminService, id string) bool {
-	instances, err := a.app.ListInstances(c.Request.Context())
+	item, err := a.app.GetInstance(c.Request.Context(), id)
 	if err != nil {
+		if errors.Is(err, model.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "服务实例不存在"})
+			return false
+		}
 		c.JSON(http.StatusServiceUnavailable, gin.H{"ok": false, "error": err.Error()})
 		return false
 	}
-	for _, item := range instances {
-		if item.ID == id {
-			return allowProject(c, item.ProjectID)
-		}
-	}
-	c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "服务实例不存在"})
-	return false
+	return allowProject(c, item.ProjectID)
 }
 
 func allowHost(c *gin.Context, a *AdminService, id string) bool {
