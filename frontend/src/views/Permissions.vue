@@ -32,9 +32,9 @@ const permissionOptions: { value: UserPermission; label: string; description: st
   { value: 'projects.view', label: '查看项目', description: '查看授权项目及环境概况' },
   { value: 'services.view', label: '查看服务', description: '查看实例、镜像、运行状态、日志和事件' },
   { value: 'services.manage', label: '管理服务', description: '在授权项目内部署、更新镜像、批量操作及滚动发布' },
-  { value: 'service_types.view', label: '查看全局服务类型', description: '查看服务类型、启动参数表单和健康检查' },
+  { value: 'service_types.view', label: '查看全局服务类型', description: '查看服务类型和启动参数表单' },
   { value: 'service_types.manage', label: '管理全局服务类型', description: '新增、修改和删除所有项目共用的服务类型' },
-  { value: 'rollout_templates.manage', label: '管理全局发布模板', description: '创建全局发布和健康检测模板，需同时授予管理服务权限' },
+  { value: 'rollout_templates.manage', label: '管理全局发布模板', description: '创建全局发布策略模板，需同时授予管理服务权限' },
   { value: 'hosts.view', label: '查看主机', description: '查看授权项目关联的主机信息' },
   { value: 'hosts.manage', label: '管理主机', description: '配置或删除主机并测试连接' },
 ]
@@ -57,13 +57,13 @@ const permissionTree = [
   },
   {
     id: 'service_types', label: '服务类型', description: '所有项目共用的服务类型配置', children: [
-      { id: 'service_types.view', label: '查看全局服务类型', description: '查看服务类型、启动参数表单和健康检查' },
+      { id: 'service_types.view', label: '查看全局服务类型', description: '查看服务类型和启动参数表单' },
       { id: 'service_types.manage', label: '管理全局服务类型', description: '新增、修改和删除所有项目共用的服务类型' },
     ],
   },
   {
     id: 'rollout_templates', label: '发布模板', description: '所有项目共用的发布模板', children: [
-      { id: 'rollout_templates.manage', label: '管理全局发布模板', description: '创建全局发布和健康检测模板，需同时授予管理服务权限' },
+      { id: 'rollout_templates.manage', label: '管理全局发布模板', description: '创建全局发布策略模板，需同时授予管理服务权限' },
     ],
   },
   {

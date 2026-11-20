@@ -3,7 +3,6 @@ package internal
 import (
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -52,11 +51,8 @@ func (a *AdminService) createRollout(c *gin.Context) {
 	if request.MaxParallelPerGroup == 0 {
 		request.MaxParallelPerGroup = 2
 	}
-	if request.HealthTimeoutSeconds == 0 {
-		request.HealthTimeoutSeconds = 300
-	}
-	if request.MaxUnavailablePerGroup < 1 || request.MaxUnavailablePerGroup > 1000 || request.MaxParallel < 1 || request.MaxParallel > 50 || request.MaxParallelPerGroup < 1 || request.MaxParallelPerGroup > request.MaxParallel || request.HealthTimeoutSeconds < 10 || request.HealthTimeoutSeconds > 1800 {
-		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "不可用数、并发或健康检查超时超出允许范围"})
+	if request.MaxUnavailablePerGroup < 1 || request.MaxUnavailablePerGroup > 1000 || request.MaxParallel < 1 || request.MaxParallel > 50 || request.MaxParallelPerGroup < 1 || request.MaxParallelPerGroup > request.MaxParallel {
+		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "不可用数或并发超出允许范围"})
 		return
 	}
 	if len(request.InstanceIDs) == 0 {
@@ -138,30 +134,6 @@ func (a *AdminService) createRollout(c *gin.Context) {
 				return
 			}
 		}
-		probe := rollout.EffectiveProbe(request, typeConfig)
-		if err := rollout.ValidateProbe(probe); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": fmt.Sprintf("服务类型 %s：%v", typeConfig.Name, err)})
-			return
-		}
-		if probe.Type == "tcp" || probe.Type == "http" {
-			host, exists := hostByID[item.HostID]
-			if !exists {
-				c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": fmt.Sprintf("实例 %s 的部署主机不存在", item.Name)})
-				return
-			}
-			address := strings.Trim(strings.TrimSpace(host.InternalIP), "[]")
-			if address == "" {
-				address = strings.Trim(strings.TrimSpace(host.ExternalIP), "[]")
-			}
-			if address == "" {
-				c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": fmt.Sprintf("主机 %s 未配置可访问的内网或外网 IP，无法执行健康检查", host.Name)})
-				return
-			}
-			if net.ParseIP(address) == nil {
-				c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": fmt.Sprintf("主机 %s 的内网/外网 IP 无效，无法执行健康检查", host.Name)})
-				return
-			}
-		}
 	}
 	groups, items := rollout.BuildPlan(request, projectID, selected, allInstances, typeByID, hostByID)
 	job := model.RolloutJob{
@@ -173,7 +145,6 @@ func (a *AdminService) createRollout(c *gin.Context) {
 		MaxUnavailablePerGroup: request.MaxUnavailablePerGroup,
 		MaxParallel:            request.MaxParallel,
 		MaxParallelPerGroup:    request.MaxParallelPerGroup,
-		HealthTimeoutSeconds:   request.HealthTimeoutSeconds,
 		Groups:                 groups,
 	}
 	created, err := a.rollouts.Create(job, items)

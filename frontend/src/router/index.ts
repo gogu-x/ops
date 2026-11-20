@@ -5,6 +5,7 @@ import Hosts from '../views/Hosts.vue'
 import Services from '../views/Services.vue'
 import ServiceTypes from '../views/ServiceTypes.vue'
 import Rollouts from '../views/Rollouts.vue'
+import AutoOpen from '../views/AutoOpen.vue'
 import Projects from '../views/Projects.vue'
 import Permissions from '../views/Permissions.vue'
 import { hasUserPermission } from '../stores/auth'
@@ -27,6 +28,7 @@ const router = createRouter({
     { path: '/services', component: Services },
     { path: '/services/types', component: ServiceTypes },
     { path: '/services/rollouts', component: Rollouts },
+    { path: '/services/auto-open', component: AutoOpen },
     { path: '/projects', component: Projects },
     { path: '/permissions', component: Permissions },
   ],

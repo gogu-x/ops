@@ -60,6 +60,9 @@ func (r *MemoryRepository) Get(_ context.Context, id string) (model.ServiceInsta
 func (r *MemoryRepository) Create(_ context.Context, item model.ServiceInstance) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if _, exists := r.items[item.ID]; exists {
+		return ErrAlreadyExists
+	}
 	for _, existing := range r.items {
 		if existing.ProjectID == item.ProjectID && existing.EnvironmentID == item.EnvironmentID && existing.ServiceTypeID == item.ServiceTypeID && existing.Name == item.Name {
 			return ErrAlreadyExists

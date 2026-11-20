@@ -226,11 +226,11 @@ onMounted(loadHosts)
 <template>
   <AppLayout>
     <div class="page-content-loading" v-loading="loading">
-    <div class="page-heading page-heading-modern page-heading-actions-only">
-      <el-button v-if="canManage()" type="primary" :icon="Plus" @click="openCreate">添加主机</el-button>
-    </div>
-
     <el-card class="plain-card" shadow="never">
+      <header class="ops-list-toolbar is-flat">
+        <h2>主机列表</h2>
+        <el-button v-if="canManage()" type="primary" :icon="Plus" @click="openCreate">添加主机</el-button>
+      </header>
       <div class="host-list">
         <div v-for="row in hosts" :key="row.id" class="host-item">
           <div class="host-item-icon">
@@ -484,7 +484,6 @@ onMounted(loadHosts)
 .host-test-hint.is-passed { color: #218263; }
 
 @media (max-width: 760px) {
-  .page-heading-modern { flex-direction: column; }
   .host-list { gap: 10px; }
   .host-item { display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 12px; padding: 14px; }
   .host-item-actions { grid-column: 1 / -1; width: 100%; padding-top: 10px; border-top: 1px solid #eef1f5; }

@@ -2,8 +2,7 @@ package model
 
 import "time"
 
-// ReadinessProbe describes the check that gates a rolling deployment wave.
-// TCP and HTTP ports are host-published ports reachable from the Ops API.
+// ReadinessProbe describes a legacy service-type probe configuration.
 type ReadinessProbe struct {
 	Type string `json:"type" bson:"type"` // "docker", "tcp", or "http"
 	Port int    `json:"port,omitempty" bson:"port,omitempty"`
@@ -12,14 +11,12 @@ type ReadinessProbe struct {
 
 type CreateRolloutRequest struct {
 	ServiceParameterValuesRequest
-	ReadinessProbe         *ReadinessProbe `json:"readiness_probe,omitempty"`
-	InstanceIDs            []string        `json:"instance_ids" binding:"required,min=1"`
-	Action                 string          `json:"action" binding:"required"` // restart | update_image
-	Image                  string          `json:"image,omitempty"`
-	MaxUnavailablePerGroup int             `json:"max_unavailable_per_group"`
-	MaxParallel            int             `json:"max_parallel"`
-	MaxParallelPerGroup    int             `json:"max_parallel_per_group"`
-	HealthTimeoutSeconds   int             `json:"health_timeout_seconds"`
+	InstanceIDs            []string `json:"instance_ids" binding:"required,min=1"`
+	Action                 string   `json:"action" binding:"required"` // restart | update_image
+	Image                  string   `json:"image,omitempty"`
+	MaxUnavailablePerGroup int      `json:"max_unavailable_per_group"`
+	MaxParallel            int      `json:"max_parallel"`
+	MaxParallelPerGroup    int      `json:"max_parallel_per_group"`
 }
 
 type RolloutGroupPlan struct {
@@ -47,7 +44,6 @@ type RolloutJob struct {
 	MaxUnavailablePerGroup int                `json:"max_unavailable_per_group" bson:"max_unavailable_per_group"`
 	MaxParallel            int                `json:"max_parallel" bson:"max_parallel"`
 	MaxParallelPerGroup    int                `json:"max_parallel_per_group" bson:"max_parallel_per_group"`
-	HealthTimeoutSeconds   int                `json:"health_timeout_seconds" bson:"health_timeout_seconds"`
 	Groups                 []RolloutGroupPlan `json:"groups" bson:"groups"`
 	LeaseOwner             string             `json:"-" bson:"lease_owner,omitempty"`
 	LeaseUntil             time.Time          `json:"-" bson:"lease_until,omitempty"`
@@ -66,7 +62,6 @@ type RolloutItem struct {
 	GroupKey            string            `json:"group_key" bson:"group_key"`
 	PreviousImage       string            `json:"previous_image" bson:"previous_image"`
 	TargetImage         string            `json:"target_image" bson:"target_image"`
-	ReadinessProbe      ReadinessProbe    `json:"readiness_probe" bson:"readiness_probe"`
 	InitiallyAvailable  bool              `json:"initially_available" bson:"initially_available"`
 	Status              string            `json:"status" bson:"status"` // pending | running | health_check | succeeded | failed
 	Attempt             int               `json:"attempt" bson:"attempt"`
@@ -93,12 +88,10 @@ type RolloutDetail struct {
 }
 
 type RolloutTemplate struct {
-	ID                  string          `json:"id" bson:"_id"`
-	Kind                string          `json:"kind" bson:"kind"`
-	Name                string          `json:"name" bson:"name"`
-	MaxUnavailable      int             `json:"maxUnavailable,omitempty" bson:"max_unavailable,omitempty"`
-	MaxParallel         int             `json:"maxParallel,omitempty" bson:"max_parallel,omitempty"`
-	MaxParallelPerGroup int             `json:"maxParallelPerGroup,omitempty" bson:"max_parallel_per_group,omitempty"`
-	Probe               *ReadinessProbe `json:"probe,omitempty" bson:"probe,omitempty"`
-	Timeout             int             `json:"timeout,omitempty" bson:"timeout,omitempty"`
+	ID                  string `json:"id" bson:"_id"`
+	Kind                string `json:"kind" bson:"kind"`
+	Name                string `json:"name" bson:"name"`
+	MaxUnavailable      int    `json:"maxUnavailable,omitempty" bson:"max_unavailable,omitempty"`
+	MaxParallel         int    `json:"maxParallel,omitempty" bson:"max_parallel,omitempty"`
+	MaxParallelPerGroup int    `json:"maxParallelPerGroup,omitempty" bson:"max_parallel_per_group,omitempty"`
 }

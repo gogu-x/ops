@@ -2,7 +2,7 @@
 import { computed, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Box, Collection, FolderOpened, Grid, Monitor, RefreshRight, SwitchButton, User } from '@element-plus/icons-vue'
+import { Box, Clock, Collection, FolderOpened, Grid, Monitor, RefreshRight, SwitchButton, User } from '@element-plus/icons-vue'
 import { useAuthStore } from '../stores/auth'
 
 withDefaults(defineProps<{ fixedViewport?: boolean }>(), { fixedViewport: false })
@@ -19,6 +19,7 @@ const navigation = computed(() => {
     { path: '/services', label: '服务', icon: Box, visible: canViewServices, children: [
       { path: '/services/types', label: '服务类型', icon: Collection, visible: true },
       { path: '/services/rollouts', label: '滚动发布', icon: RefreshRight, visible: true },
+      { path: '/services/auto-open', label: '自动开服', icon: Clock, visible: true },
     ] },
     { path: '/services/types', label: '服务类型', icon: Collection, visible: !canViewServices && canViewServiceTypes, children: [] },
     { path: '/projects', label: '项目', icon: FolderOpened, visible: auth.hasPermission('projects.view'), children: [] },
@@ -68,9 +69,9 @@ async function logout() {
 .app-navigation a.navigation-subitem .el-icon { font-size: 15px; }
 .app-navigation a:hover { background: rgba(255, 255, 255, .08); color: #fff; }
 .app-navigation a.active { font-weight: 600; }
-.app-navigation a.active:not(.navigation-subitem) { background: transparent; color: rgba(255, 255, 255, .68); }
-.app-navigation a.active:not(.navigation-subitem) > span { color: #9cb5f4; }
-.app-navigation a.navigation-subitem.active { background: var(--ops-primary); color: #fff; }
+.app-navigation a.active:not([aria-current="page"]) { background: transparent; color: rgba(255, 255, 255, .68); }
+.app-navigation a.active:not([aria-current="page"]) > span { color: #9cb5f4; }
+.app-navigation a.active[aria-current="page"] { background: var(--ops-primary); color: #fff; }
 .app-navigation .el-icon { font-size: 17px; }
 .account-menu { margin-top: auto; }
 .account-button { display: flex; gap: 9px; align-items: center; padding: 5px 0 5px 10px; border: 0; background: transparent; color: #fff; font: inherit; cursor: pointer; }
@@ -87,7 +88,7 @@ async function logout() {
   .app-navigation { width: 100%; align-items: center; }
   .navigation-group { width: 100%; align-items: center; }
   .app-navigation a { justify-content: center; width: 44px; padding: 0; }
-  .app-navigation a.active:not(.navigation-subitem) > .el-icon { color: #9cb5f4; }
+  .app-navigation a.active:not([aria-current="page"]) > .el-icon { color: #9cb5f4; }
   .account-button { padding: 0; }
   .is-workspace .app-header { flex-basis: 64px; }
   .app-main { padding: 24px 20px; }

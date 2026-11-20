@@ -1215,12 +1215,12 @@ onUnmounted(() => {
         <div class="rail-footer"><el-button text :icon="FolderOpened" @click="router.push('/projects')">管理项目</el-button></div>
       </aside>
       <section class="service-workspace">
-        <div class="workspace-heading">
-          <div v-if="activeProject" class="environment-tabs" aria-label="选择环境">
+        <div v-if="activeProject" class="workspace-heading">
+          <div class="environment-tabs" aria-label="选择环境">
             <button v-for="env in environmentsInProject(activeProjectId)" :key="env.id" :class="{ active: activeEnvironmentId === env.id }" :aria-pressed="activeEnvironmentId === env.id" @click="selectEnvironment(env.id)">{{ env.name }}</button>
           </div>
-          <div class="workspace-actions">
-            <el-dropdown v-if="canManage && activeProject" trigger="click">
+          <div v-if="canManage" class="workspace-actions">
+            <el-dropdown trigger="click">
               <el-button text :icon="MoreFilled" aria-label="项目内资源管理">管理</el-button>
               <template #dropdown><el-dropdown-menu>
                 <el-dropdown-item @click="openCreateEnvironment">新增环境</el-dropdown-item>
@@ -1229,7 +1229,6 @@ onUnmounted(() => {
                 <el-dropdown-item v-if="activeEnvironment" divided @click="openServiceTypes">查看服务类型</el-dropdown-item>
               </el-dropdown-menu></template>
             </el-dropdown>
-            <el-button v-if="canManage" type="primary" :icon="Plus" :disabled="!activeEnvironmentId || !types.length" @click="openCreateInstance">部署实例</el-button>
           </div>
         </div>
         <el-alert v-if="loadError" title="数据加载失败，请重试；已有数据可能不是最新状态。" type="error" show-icon :closable="false" class="load-error" />
@@ -1249,6 +1248,7 @@ onUnmounted(() => {
             <div class="filter-actions">
               <el-button v-if="canManage" size="small" type="primary" plain :icon="MoreFilled" :disabled="!environmentInstances.length || operationTask?.status === 'running' || batchOperationSubmitting" @click="openBatchOperationDrawer">批量操作</el-button>
               <el-input v-model="keyword" :prefix-icon="Search" clearable placeholder="搜索实例、镜像或备注" aria-label="搜索实例" class="instance-search" />
+              <el-button v-if="canManage" type="primary" :icon="Plus" :disabled="!types.length" @click="openCreateInstance">部署实例</el-button>
             </div>
           </div>
           <section v-if="operationTask" class="bulk-task-panel" :class="`task-${operationTask.status}`">
@@ -1799,17 +1799,18 @@ onUnmounted(() => {
 .rail-footer { margin-top: auto; padding-top: 20px; }
 .rail-footer .el-button { color: var(--ops-text-secondary); }
 .service-workspace { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 26px 30px 12px; }
-.workspace-heading { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; margin: -6px -8px 18px; padding: 16px 18px; border: 1px solid #e5ecf8; border-radius: 10px; background: linear-gradient(112deg, #f0f5ff 0%, #f8faff 58%, #f2f7ff 100%); flex-shrink: 0; }
-.environment-tabs { display: flex; align-items: center; gap: 3px; padding: 3px; background: var(--ops-bg); border-radius: 6px; max-width: 100%; overflow-x: auto; }
+.workspace-heading { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-shrink: 0; }
+.environment-tabs { display: flex; align-items: center; gap: 3px; padding: 3px; background: var(--ops-bg); border-radius: 6px; min-width: 0; max-width: 100%; overflow-x: auto; }
 .environment-tabs button { flex-shrink: 0; padding: 5px 12px; background: transparent; border: 0; border-radius: 4px; font: inherit; font-size: 12px; color: var(--ops-text-secondary); cursor: pointer; }
 .environment-tabs button.active { background: #fff; color: var(--ops-text); box-shadow: 0 1px 4px #17294512; }
-.workspace-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.workspace-actions { flex-shrink: 0; margin-left: auto; }
 .service-filter-bar { display: flex; align-items: center; gap: 16px; border-bottom: 1px solid var(--ops-border); flex-shrink: 0; }
 .type-tabs { display: flex; min-width: 0; gap: 23px; overflow-x: auto; }
 .type-tab { display: flex; align-items: center; gap: 7px; flex-shrink: 0; padding: 11px 0 13px; background: transparent; border: 0; border-bottom: 2px solid transparent; color: var(--ops-text-secondary); font: inherit; font-size: 13px; cursor: pointer; }
 .type-tab.active { color: var(--ops-primary); border-bottom-color: var(--ops-primary); }
 .type-tab em { font-style: normal; font-size: 11px; padding: 1px 6px; background: var(--ops-bg); color: var(--ops-text-secondary); border-radius: 4px; }
 .filter-actions { display: flex; align-items: center; gap: 9px; margin-left: auto; min-width: 0; }
+.filter-actions .el-button { flex-shrink: 0; }
 .bulk-task-panel { flex-shrink: 0; margin: 8px 0 10px; padding: 12px 14px; border: 1px solid var(--ops-border); border-radius: 9px; background: #fafcff; }
 .bulk-task-panel.task-succeeded { border-color: #d6eee4; background: #f7fcf9; }
 .bulk-task-panel.task-partial, .bulk-task-panel.task-failed { border-color: #f4d5d8; background: #fffafa; }
@@ -2087,7 +2088,6 @@ onUnmounted(() => {
 @media (max-width: 1000px) {
   .project-rail { flex-basis: 170px; width: 170px; }
   .service-workspace { padding: 22px 20px 12px; }
-  .workspace-heading { gap: 12px; margin: -4px -4px 16px; padding: 14px; }
   .service-filter-bar { flex-wrap: wrap; gap: 0; }
   .type-tabs { width: 100%; }
   .filter-actions { width: 100%; margin: 4px 0; }
@@ -2110,8 +2110,7 @@ onUnmounted(() => {
   .project-nav-item { width: auto; flex-shrink: 0; margin: 0; padding: 8px 12px; }
   .project-nav-name { max-width: 160px; }
   .service-workspace { padding: 16px 14px 10px; }
-  .workspace-heading { margin: -2px -2px 10px; padding: 12px; gap: 10px; }
-  .workspace-actions { margin-left: 0; }
+  .workspace-heading { margin-bottom: 8px; }
   .bulk-task-panel { margin: 7px 0; padding: 10px; }
   .bulk-task-progress { flex-wrap: wrap; }
   .bulk-task-progress .el-progress { flex-basis: 100%; }

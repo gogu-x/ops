@@ -236,14 +236,14 @@ func (m *Manager) RetryFailed(id, operator string) error {
 		current, exists := liveByID[item.InstanceID]
 		eventType, eventMessage := "retry_queued", "重新排队执行失败实例"
 		if exists && rolloutActionApplied(job, item, current, nil) {
-			item.Status = "health_check"
-			eventType, eventMessage = "retry_resume_health_check", "目标容器已存在，只恢复就绪检查"
+			markItemSucceeded(&item)
+			eventType, eventMessage = "instance_succeeded", "重试时确认目标容器已在运行，实例发布成功"
 		} else {
 			item.Status = "pending"
+			item.Error = ""
+			item.FinishedAt = time.Time{}
+			item.UpdatedAt = time.Now().UTC()
 		}
-		item.Error = ""
-		item.FinishedAt = time.Time{}
-		item.UpdatedAt = time.Now().UTC()
 		if err := m.repo.UpdateItem(ctx, item); err != nil {
 			return err
 		}
@@ -441,40 +441,31 @@ func (m *Manager) process(ctx context.Context, job model.RolloutJob) {
 		}
 		return
 	}
-	// A process may have stopped after marking an item active. Requeue those items;
-	// reconcile the Docker state before deciding whether to re-run the operation.
-	recoveredChecks := make([]model.RolloutItem, 0)
+	// Reconcile interrupted operations and legacy health_check items with Docker state.
 	for i := range items {
-		if items[i].Status != "running" && items[i].Status != "health_check" {
+		item := &items[i]
+		if item.Status != "running" && item.Status != "health_check" {
 			continue
 		}
-		current, statusErr := m.app.InstanceStatus(items[i].InstanceID)
-		applied := rolloutActionApplied(job, items[i], current, statusErr)
-		if applied {
-			items[i].Status = "health_check"
-			recoveredChecks = append(recoveredChecks, items[i])
-			_ = m.repo.AppendEvent(jobCtx, rolloutEvent(job.ID, items[i].InstanceID, job.Operator, "recovered_health_check", "检测到目标容器已创建，恢复就绪检查"))
+		current, statusErr := m.app.InstanceStatus(item.InstanceID)
+		eventType, eventMessage := "recovered_retry", "目标容器尚未确认，恢复实例操作"
+		if rolloutActionApplied(job, *item, current, statusErr) {
+			markItemSucceeded(item)
+			eventType, eventMessage = "instance_succeeded", "恢复时确认目标容器已在运行，实例发布成功"
 		} else {
-			items[i].Status = "pending"
-			items[i].Error = ""
-			_ = m.repo.AppendEvent(jobCtx, rolloutEvent(job.ID, items[i].InstanceID, job.Operator, "recovered_retry", "目标容器尚未确认，恢复实例操作"))
+			item.Status = "pending"
+			item.Error = ""
+			item.UpdatedAt = time.Now().UTC()
 		}
-		items[i].UpdatedAt = time.Now().UTC()
-		if err := m.repo.UpdateItem(jobCtx, items[i]); err != nil {
+		if err := m.repo.UpdateItem(jobCtx, *item); err != nil {
 			m.pause(job.ID, job.Operator, "恢复中断实例失败: "+err.Error())
 			return
 		}
+		_ = m.repo.AppendEvent(jobCtx, rolloutEvent(job.ID, item.InstanceID, job.Operator, eventType, eventMessage))
 	}
 	groupByKey := make(map[string]model.RolloutGroupPlan, len(job.Groups))
 	for _, group := range job.Groups {
 		groupByKey[group.Key] = group
-	}
-	for _, item := range recoveredChecks {
-		workers.Add(1)
-		go func(item model.RolloutItem) {
-			defer workers.Done()
-			m.verifyItem(workCtx, job, item)
-		}(item)
 	}
 	for {
 		if jobCtx.Err() != nil {
@@ -500,7 +491,7 @@ func (m *Manager) process(ctx context.Context, job model.RolloutJob) {
 		unfinished := false
 		for _, item := range items {
 			switch item.Status {
-			case "running", "health_check":
+			case "running":
 				globalActive++
 				groupActive[item.GroupKey]++
 				unfinished = true
@@ -606,7 +597,12 @@ func allRolloutItemsFailed(items []model.RolloutItem) bool {
 }
 
 func rolloutActionApplied(job model.RolloutJob, item model.RolloutItem, current model.ServiceInstance, statusErr error) bool {
-	if statusErr != nil || current.Status != model.StatusRunning || current.ContainerID == "" || current.ContainerID == item.PreviousContainerID {
+	if statusErr != nil || current.Status != model.StatusRunning || current.ContainerID == "" {
+		return false
+	}
+	// Legacy health_check items had already completed the Docker operation. A
+	// successful in-place restart can still have its original container ID.
+	if current.ContainerID == item.PreviousContainerID && (job.Action != "restart" || item.Status != "health_check") {
 		return false
 	}
 	return (job.Action != "update_image" || current.ContainerImage == item.TargetImage) &&
@@ -632,62 +628,20 @@ func (m *Manager) runItem(ctx context.Context, job model.RolloutJob, item model.
 		}
 		return
 	}
-	item.Status = "health_check"
-	item.UpdatedAt = time.Now().UTC()
+	markItemSucceeded(&item)
 	if err := m.repo.UpdateItem(context.Background(), item); err != nil {
-		m.pause(job.ID, job.Operator, "保存健康检查阶段失败: "+err.Error())
+		m.pause(job.ID, job.Operator, "保存实例成功状态失败: "+err.Error())
 		return
 	}
-	_ = m.repo.AppendEvent(context.Background(), rolloutEvent(job.ID, item.InstanceID, job.Operator, "health_check_started", "容器操作成功，等待就绪检查"))
-	m.verifyItem(ctx, job, item)
+	_ = m.repo.AppendEvent(context.Background(), rolloutEvent(job.ID, item.InstanceID, job.Operator, "instance_succeeded", "容器操作成功，实例发布成功"))
+	m.refreshProgress(job.ID, nil)
 }
 
-func (m *Manager) verifyItem(ctx context.Context, job model.RolloutJob, item model.RolloutItem) {
-	deadline := time.NewTimer(time.Duration(job.HealthTimeoutSeconds) * time.Second)
-	defer deadline.Stop()
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-	consecutiveReady := 0
-	lastReason := "等待第一次健康检查"
-	for {
-		if ctx.Err() != nil {
-			return
-		}
-		ready, reason, probeErr := m.app.InstanceReadiness(ctx, item.InstanceID, item.ReadinessProbe)
-		if ctx.Err() != nil {
-			return
-		}
-		if probeErr != nil {
-			reason = probeErr.Error()
-		}
-		lastReason = reason
-		if ready {
-			consecutiveReady++
-			if consecutiveReady >= 2 {
-				item.Status = "succeeded"
-				item.Error = ""
-				item.FinishedAt = time.Now().UTC()
-				item.UpdatedAt = item.FinishedAt
-				if err := m.repo.UpdateItem(context.Background(), item); err != nil {
-					m.pause(job.ID, job.Operator, "保存实例成功状态失败: "+err.Error())
-					return
-				}
-				_ = m.repo.AppendEvent(context.Background(), rolloutEvent(job.ID, item.InstanceID, job.Operator, "instance_succeeded", "就绪检查连续通过，实例发布成功"))
-				m.refreshProgress(job.ID, nil)
-				return
-			}
-		} else {
-			consecutiveReady = 0
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-deadline.C:
-			m.failItem(job, item, "健康检查超时: "+lastReason)
-			return
-		case <-ticker.C:
-		}
-	}
+func markItemSucceeded(item *model.RolloutItem) {
+	item.Status = "succeeded"
+	item.Error = ""
+	item.FinishedAt = time.Now().UTC()
+	item.UpdatedAt = item.FinishedAt
 }
 
 func (m *Manager) failItem(job model.RolloutJob, item model.RolloutItem, reason string) {
@@ -793,18 +747,9 @@ func (m *Manager) CreateTemplate(ctx context.Context, item model.RolloutTemplate
 	if item.Name == "" || utf8.RuneCountInString(item.Name) > 60 {
 		return model.RolloutTemplate{}, fmt.Errorf("%w: %s", ErrInvalidTemplate, "模板名称需为 1 到 60 个字符")
 	}
-	valid := false
-	switch item.Kind {
-	case "release":
-		valid = item.MaxUnavailable >= 1 && item.MaxUnavailable <= 1000 &&
-			item.MaxParallel >= 1 && item.MaxParallel <= 50 &&
-			item.MaxParallelPerGroup >= 1 && item.MaxParallelPerGroup <= item.MaxParallel
-		item.Probe, item.Timeout = nil, 0
-	case "health":
-		valid = item.Probe != nil && ValidateProbe(*item.Probe) == nil && item.Timeout >= 10 && item.Timeout <= 1800
-		item.MaxUnavailable, item.MaxParallel, item.MaxParallelPerGroup = 0, 0, 0
-	}
-	if !valid {
+	if item.Kind != "release" || item.MaxUnavailable < 1 || item.MaxUnavailable > 1000 ||
+		item.MaxParallel < 1 || item.MaxParallel > 50 ||
+		item.MaxParallelPerGroup < 1 || item.MaxParallelPerGroup > item.MaxParallel {
 		return model.RolloutTemplate{}, fmt.Errorf("%w: %s", ErrInvalidTemplate, "策略参数无效或超出允许范围")
 	}
 	item.ID = uuid.NewString()
@@ -812,22 +757,4 @@ func (m *Manager) CreateTemplate(ctx context.Context, item model.RolloutTemplate
 		return model.RolloutTemplate{}, err
 	}
 	return item, nil
-}
-
-func ValidateProbe(probe model.ReadinessProbe) error {
-	switch probe.Type {
-	case "docker", "tcp":
-	case "http":
-		if probe.Path != "" && !strings.HasPrefix(probe.Path, "/") {
-			return errors.New("HTTP 探针路径必须以 / 开头")
-		}
-	case "":
-		return errors.New("尚未配置就绪检查，请在服务类型中设置 Docker、TCP 或 HTTP 探针")
-	default:
-		return errors.New("就绪检查类型无效")
-	}
-	if (probe.Type == "tcp" || probe.Type == "http") && (probe.Port < 1 || probe.Port > 65535) {
-		return errors.New("TCP/HTTP 探针端口必须在 1 到 65535 之间")
-	}
-	return nil
 }

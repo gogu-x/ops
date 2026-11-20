@@ -245,32 +245,42 @@ body {
   font-size: 12px;
 }
 
-/* ---------- Page heading ---------- */
-.page-heading {
+/* ---------- List toolbar ---------- */
+.ops-list-toolbar {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 20px;
-  gap: 16px;
-}
-
-.page-heading h2 {
-  margin: 0 0 6px;
-  font-size: 20px;
-  font-weight: 600;
-  color: var(--ops-text);
-}
-
-.page-heading p {
-  margin: 0;
-  color: var(--ops-text-secondary);
-  font-size: 13px;
-  max-width: 640px;
-}
-
-.page-heading-actions-only {
-  justify-content: flex-end;
   align-items: center;
+  gap: 12px;
+  min-height: 62px;
+  padding: 12px 20px;
+}
+
+.ops-list-toolbar h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--ops-text);
+  white-space: nowrap;
+}
+
+.ops-list-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ops-list-toolbar.is-flat {
+  min-height: 0;
+  padding: 0 0 12px;
+}
+
+.ops-list-toolbar-actions > .el-button {
+  flex: none;
+}
+
+.ops-list-toolbar-actions > .el-button + .el-button {
+  margin-left: 0;
 }
 
 /* ---------- Cards ---------- */
@@ -415,9 +425,7 @@ body {
     }
   }
 
-  .page-heading { flex-direction: column; margin-bottom: 14px; }
-  .page-heading-actions-only { flex-direction: row; align-items: center; }
-  .page-heading h2 { font-size: 19px; }
+  .ops-list-toolbar { padding-inline: 12px; }
   .auth-page { padding: 24px 0; }
   .login-card :deep(.el-card__body) { padding: 32px 22px 26px; }
   .auth-footer { padding: 0 20px; line-height: 1.5; }

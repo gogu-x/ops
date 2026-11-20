@@ -3,11 +3,124 @@ package rollout
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/gogu-x/ops/admin/internal/application"
+	"github.com/gogu-x/ops/instance"
 	"github.com/gogu-x/ops/model"
 )
+
+type rolloutTestGateway func(string, interface{}) (interface{}, error)
+
+func (f rolloutTestGateway) Request(actor string, message interface{}) (interface{}, error) {
+	return f(actor, message)
+}
+
+func TestRolloutItemCompletesAfterContainerOperation(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		operation error
+		wantItem  string
+		wantJob   string
+	}{
+		{name: "Docker operation succeeds", wantItem: "succeeded", wantJob: "running"},
+		{name: "Docker operation fails", operation: errors.New("restart failed"), wantItem: "failed", wantJob: "paused"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			repo := NewMemoryRepository()
+			job := model.RolloutJob{ID: "job", Action: "restart", Status: "running"}
+			item := model.RolloutItem{ID: "item", JobID: job.ID, InstanceID: "game-1", Status: "running"}
+			if err := repo.Create(ctx, job, []model.RolloutItem{item}, model.RolloutAuditEvent{}); err != nil {
+				t.Fatal(err)
+			}
+			gateway := rolloutTestGateway(func(actor string, message interface{}) (interface{}, error) {
+				request, ok := message.(model.InstanceContainerActionRequest)
+				if !ok || actor != "ops-instance" || request.ID != item.InstanceID || request.Action != "restart" {
+					t.Fatalf("unexpected actor request %s: %+v", actor, message)
+				}
+				return nil, tc.operation
+			})
+			manager := NewManager(repo, application.New(gateway, nil, nil, nil, nil))
+			manager.runItem(ctx, job, item)
+			detail, err := manager.Detail(job.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if detail.Job.Status != tc.wantJob || detail.Items[0].Status != tc.wantItem || detail.Items[0].FinishedAt.IsZero() {
+				t.Fatalf("unexpected job/item result: %+v / %+v", detail.Job, detail.Items[0])
+			}
+		})
+	}
+}
+
+func TestResumeLegacyHealthCheckItemWithoutRepeatingUpdate(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	repo := NewMemoryRepository()
+	job := model.RolloutJob{ID: "job", Action: "update_image", Status: "paused"}
+	item := model.RolloutItem{
+		ID: "item", JobID: job.ID, InstanceID: "game-1", Status: "health_check", Attempt: 1,
+		TargetImage: "game:new", PreviousContainerID: "original-container",
+	}
+	if err := repo.Create(ctx, job, []model.RolloutItem{item}, model.RolloutAuditEvent{}); err != nil {
+		t.Fatal(err)
+	}
+	gateway := rolloutTestGateway(func(actor string, message interface{}) (interface{}, error) {
+		request, ok := message.(model.StatusRequest)
+		if !ok || actor != "ops-instance" || request.ID != item.InstanceID {
+			return nil, fmt.Errorf("unexpected actor request %s: %+v", actor, message)
+		}
+		return model.ServiceInstance{Status: model.StatusRunning, ContainerID: "new-container", ContainerImage: item.TargetImage}, nil
+	})
+	manager := NewManager(repo, application.New(gateway, nil, nil, nil, nil))
+	if err := manager.Resume(job.ID, "operator"); err != nil {
+		t.Fatal(err)
+	}
+	manager.claimAndRun(ctx)
+	detail, err := manager.Detail(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.Job.Status != "succeeded" || detail.Items[0].Status != "succeeded" || detail.Items[0].Attempt != 1 {
+		t.Fatalf("unexpected resumed job/item result: %+v / %+v", detail.Job, detail.Items[0])
+	}
+}
+
+func TestRetryLegacyHealthCheckFailureKeepsAppliedUpdate(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMemoryRepository()
+	job := model.RolloutJob{ID: "job", Action: "update_image", Status: "paused"}
+	item := model.RolloutItem{
+		ID: "item", JobID: job.ID, InstanceID: "game-1", Status: "failed", Attempt: 1,
+		TargetImage: "game:new", PreviousContainerID: "original-container", Error: "健康检查超时",
+	}
+	if err := repo.Create(ctx, job, []model.RolloutItem{item}, model.RolloutAuditEvent{}); err != nil {
+		t.Fatal(err)
+	}
+	gateway := rolloutTestGateway(func(actor string, message interface{}) (interface{}, error) {
+		if _, ok := message.(model.EnrichRequest); !ok || actor != "ops-instance" {
+			return nil, fmt.Errorf("unexpected actor request %s: %+v", actor, message)
+		}
+		return model.ListResponse{ServiceInstances: []model.ServiceInstance{{
+			ID: item.InstanceID, Status: model.StatusRunning, ContainerID: "new-container", ContainerImage: item.TargetImage,
+		}}}, nil
+	})
+	manager := NewManager(repo, application.New(gateway, nil, nil, nil, instance.NewMemoryRepository()))
+	if err := manager.RetryFailed(job.ID, "operator"); err != nil {
+		t.Fatal(err)
+	}
+	detail, err := manager.Detail(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := detail.Items[0]
+	if detail.Job.Status != "queued" || result.Status != "succeeded" || result.Attempt != 1 || result.Error != "" {
+		t.Fatalf("unexpected retried job/item result: %+v / %+v", detail.Job, result)
+	}
+}
 
 func TestCreateRolloutForAnInstanceInAnExistingJob(t *testing.T) {
 	ctx := context.Background()

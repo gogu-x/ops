@@ -28,6 +28,7 @@ func (a *AdminService) registerRoutes(r *gin.Engine) {
 	a.registerInstanceRoutes(protected)
 	a.registerRolloutRoutes(protected)
 	a.registerRolloutTemplateRoutes(protected)
+	a.registerAutoOpenRoutes(protected)
 	a.registerUserRoutes(protected)
 	protected.GET("/admin/ping", requireRole("admin"), func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) })
 }

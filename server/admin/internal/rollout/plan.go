@@ -7,13 +7,6 @@ import (
 	"github.com/gogu-x/ops/model"
 )
 
-func EffectiveProbe(request model.CreateRolloutRequest, serviceType model.ServiceType) model.ReadinessProbe {
-	if request.ReadinessProbe != nil {
-		return *request.ReadinessProbe
-	}
-	return serviceType.ReadinessProbe
-}
-
 func BuildPlan(request model.CreateRolloutRequest, projectID string, selected, allInstances []model.ServiceInstance, typeByID map[string]model.ServiceType, hostByID map[string]model.Host) ([]model.RolloutGroupPlan, []model.RolloutItem) {
 	groupPlans := make(map[string]model.RolloutGroupPlan)
 	for _, item := range allInstances {
@@ -56,7 +49,6 @@ func BuildPlan(request model.CreateRolloutRequest, projectID string, selected, a
 			PreviousImage:       item.Image,
 			TargetImage:         target,
 			ParameterValues:     values,
-			ReadinessProbe:      EffectiveProbe(request, typeConfig),
 			InitiallyAvailable:  item.Status == model.StatusRunning,
 		})
 	}

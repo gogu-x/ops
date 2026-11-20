@@ -638,7 +638,13 @@ func (r *MongoRepository) ClearLegacyOperationLocks(ctx context.Context) error {
 func (r *MemoryRepository) ListTemplates(_ context.Context) ([]model.RolloutTemplate, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return append([]model.RolloutTemplate{}, r.templates...), nil
+	items := make([]model.RolloutTemplate, 0, len(r.templates))
+	for _, item := range r.templates {
+		if item.Kind == "release" {
+			items = append(items, item)
+		}
+	}
+	return items, nil
 }
 
 func (r *MemoryRepository) CreateTemplate(_ context.Context, item model.RolloutTemplate) error {
@@ -649,7 +655,7 @@ func (r *MemoryRepository) CreateTemplate(_ context.Context, item model.RolloutT
 }
 
 func (r *MongoRepository) ListTemplates(ctx context.Context) ([]model.RolloutTemplate, error) {
-	cursor, err := r.templates().Find(ctx, bson.D{})
+	cursor, err := r.templates().Find(ctx, bson.M{"kind": "release"})
 	if err != nil {
 		return nil, err
 	}

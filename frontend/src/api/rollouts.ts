@@ -27,7 +27,6 @@ export interface RolloutJob {
   max_unavailable_per_group: number
   max_parallel: number
   max_parallel_per_group: number
-  health_timeout_seconds: number
   groups: RolloutGroupPlan[]
   created_at: string
   updated_at: string
@@ -42,7 +41,6 @@ export interface RolloutItem {
   group_key: string
   previous_image: string
   target_image: string
-  readiness_probe: { type: '' | 'docker' | 'tcp' | 'http'; port: number; path: string }
   initially_available: boolean
   status: 'pending' | 'running' | 'health_check' | 'succeeded' | 'failed'
   attempt: number
@@ -70,14 +68,12 @@ export interface RolloutDetail {
 
 export interface CreateRolloutRequest {
   parameter_values?: Record<string, string>
-  readiness_probe?: RolloutItem['readiness_probe']
   instance_ids: string[]
   action: RolloutAction
   image?: string
   max_unavailable_per_group: number
   max_parallel: number
   max_parallel_per_group: number
-  health_timeout_seconds: number
 }
 
 export interface ReleaseStrategy {
@@ -87,13 +83,7 @@ export interface ReleaseStrategy {
   maxParallelPerGroup: number
 }
 
-export interface HealthStrategy {
-  name: string
-  probe: RolloutItem['readiness_probe']
-  timeout: number
-}
-
-type StrategyInput = ({ kind: 'release' } & ReleaseStrategy) | ({ kind: 'health' } & HealthStrategy)
+type StrategyInput = { kind: 'release' } & ReleaseStrategy
 export type StrategyTemplate = StrategyInput & { id: string }
 
 interface ApiResponse<T> {

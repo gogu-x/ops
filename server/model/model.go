@@ -214,22 +214,23 @@ type ServiceType struct {
 // runtime-only fields: they reflect the live Docker container state fetched
 // from the instance's host at read time and are never persisted.
 type ServiceInstance struct {
-	ProjectID     string         `json:"project_id" bson:"project_id"`
-	EnvironmentID string         `json:"environment_id" bson:"environment_id"`
-	ID            string         `json:"id" bson:"_id"`
-	ServiceTypeID string         `json:"service_type_id" bson:"service_type_id"`
-	HostID        string         `json:"host_id" bson:"host_id"` // Docker host to deploy this instance's container on, chosen at deploy time
-	Name          string         `json:"name" bson:"name"`
-	RolloutGroup  string         `json:"rollout_group,omitempty" bson:"rollout_group,omitempty"`
-	Image         string         `json:"image" bson:"image"`
-	Params        []ServiceParam `json:"params" bson:"params"`
-	EnvText       string         `json:"env_text" bson:"env_text"`
-	Network       string         `json:"network" bson:"network"`           // Docker network name to attach the container to, e.g. "bridge" or a custom user-defined network
-	PortMapping   string         `json:"port_mapping" bson:"port_mapping"` // "host_port:container_port", e.g. "9001:9001"; container port defaults to host port if only one number is given
-	RestartPolicy string         `json:"restart_policy" bson:"restart_policy"`
-	Note          string         `json:"note" bson:"note"`
-	CreatedAt     time.Time      `json:"created_at" bson:"created_at"`
-	UpdatedAt     time.Time      `json:"updated_at" bson:"updated_at"`
+	ProjectID        string         `json:"project_id" bson:"project_id"`
+	EnvironmentID    string         `json:"environment_id" bson:"environment_id"`
+	ID               string         `json:"id" bson:"_id"`
+	ServiceTypeID    string         `json:"service_type_id" bson:"service_type_id"`
+	HostID           string         `json:"host_id" bson:"host_id"` // Docker host to deploy this instance's container on, chosen at deploy time
+	Name             string         `json:"name" bson:"name"`
+	RolloutGroup     string         `json:"rollout_group,omitempty" bson:"rollout_group,omitempty"`
+	Image            string         `json:"image" bson:"image"`
+	Params           []ServiceParam `json:"params" bson:"params"`
+	EnvText          string         `json:"env_text" bson:"env_text"`
+	Network          string         `json:"network" bson:"network"`           // Docker network name to attach the container to, e.g. "bridge" or a custom user-defined network
+	PortMapping      string         `json:"port_mapping" bson:"port_mapping"` // "host_port:container_port", e.g. "9001:9001"; container port defaults to host port if only one number is given
+	RestartPolicy    string         `json:"restart_policy" bson:"restart_policy"`
+	Note             string         `json:"note" bson:"note"`
+	CreatedAt        time.Time      `json:"created_at" bson:"created_at"`
+	UpdatedAt        time.Time      `json:"updated_at" bson:"updated_at"`
+	AutoOpenPolicyID string         `json:"-" bson:"auto_open_policy_id,omitempty"`
 
 	ContainerID    string `json:"container_id,omitempty" bson:"-"`
 	Status         string `json:"status" bson:"-"` // not_deployed | running | stopped | restarting | error | unknown

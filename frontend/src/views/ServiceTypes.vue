@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, Plus, Refresh } from '@element-plus/icons-vue'
+import { Delete, Plus, Refresh, Search } from '@element-plus/icons-vue'
 import AppLayout from '../components/AppLayout.vue'
 import { useAuthStore } from '../stores/auth'
 import { serviceApi, type ServiceParameterField, type ServiceType, type ServiceTypeForm } from '../api/services'
@@ -139,18 +139,16 @@ onMounted(loadAll)
 <template>
   <AppLayout>
     <div class="page-content-loading" v-loading="loading">
-      <header class="types-page-header">
-        <div><h1>服务类型</h1><p>管理所有项目共用的服务类型、启动参数和健康检查</p></div>
-        <div class="types-actions">
-          <el-button :icon="Refresh" :loading="loading" @click="loadAll">刷新</el-button>
-          <el-button v-if="canManage" :icon="Plus" type="primary" @click="openCreateType">新建服务类型</el-button>
-        </div>
-      </header>
-      <el-alert v-if="loadError" :title="loadError" type="error" show-icon :closable="false" />
-      <section class="types-list">
-        <div class="types-filters">
-          <el-input v-model="keyword" clearable placeholder="搜索类型名称" aria-label="搜索类型名称" />
-        </div>
+      <el-alert v-if="loadError" class="types-list-error" :title="loadError" type="error" show-icon :closable="false" />
+      <section class="types-list" aria-labelledby="types-list-heading">
+        <header class="ops-list-toolbar types-list-toolbar">
+          <h2 id="types-list-heading">类型列表</h2>
+          <div class="ops-list-toolbar-actions">
+            <el-input v-model="keyword" class="types-search" :prefix-icon="Search" clearable placeholder="搜索类型名称" aria-label="搜索类型名称" />
+            <el-button :icon="Refresh" :loading="loading" @click="loadAll">刷新</el-button>
+            <el-button v-if="canManage" :icon="Plus" type="primary" @click="openCreateType">新建服务类型</el-button>
+          </div>
+        </header>
         <el-table :data="filteredTypes" row-key="id" empty-text="没有符合条件的服务类型">
           <el-table-column prop="name" label="类型名称" min-width="150" />
           <el-table-column label="启动参数表单" min-width="135"><template #default="{ row }">{{ row.parameter_fields?.length ? `${row.parameter_fields.length} 个字段` : '未配置' }}</template></el-table-column>
@@ -168,20 +166,6 @@ onMounted(loadAll)
       <el-form label-width="100px" :disabled="!canManage">
         <el-form-item label="类型名称" required>
           <el-input v-model="typeForm.name" placeholder="例如 game、battle、gate" />
-        </el-form-item>
-        <el-form-item label="健康检查">
-          <el-select v-model="typeForm.readiness_probe.type">
-            <el-option label="未配置" value="" />
-            <el-option label="Docker HEALTHCHECK" value="docker" />
-            <el-option label="TCP" value="tcp" />
-            <el-option label="HTTP" value="http" />
-          </el-select>
-        </el-form-item>
-        <el-form-item v-if="typeForm.readiness_probe.type === 'tcp' || typeForm.readiness_probe.type === 'http'" label="检查端口">
-          <el-input-number v-model="typeForm.readiness_probe.port" :min="1" :max="65535" />
-        </el-form-item>
-        <el-form-item v-if="typeForm.readiness_probe.type === 'http'" label="检查路径">
-          <el-input v-model="typeForm.readiness_probe.path" placeholder="/health" />
         </el-form-item>
       </el-form>
       <section class="parameter-fields">
@@ -244,16 +228,14 @@ onMounted(loadAll)
 </template>
 
 <style scoped>
-.types-page-header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 22px; }
-.types-page-header h1 { margin: 0; font-size: 25px; color: var(--ops-text); }
-.types-page-header p { margin: 5px 0 0; font-size: 13px; color: var(--ops-text-secondary); }
-.types-actions { display: flex; flex-wrap: wrap; }
-.types-list { margin-top: 12px; overflow: hidden; border: 1px solid var(--ops-border); border-radius: 12px; background: #fff; }
+.types-list-error { margin-bottom: 12px; }
+.types-list { overflow: hidden; border: 1px solid var(--ops-border); border-radius: 12px; background: #fff; }
+.types-list-toolbar { border-bottom: 1px solid var(--ops-border); }
+.types-search { width: 215px; min-width: 0; }
 .types-list :deep(.el-table) { --el-table-header-bg-color: #f7f9fc; }
 .types-list :deep(.el-table__cell) { padding: 12px 0; }
-.types-filters { display: grid; grid-template-columns: minmax(0, 300px); gap: 10px; padding: 16px; }
-@media (max-width: 640px) {
-  .types-filters { grid-template-columns: 1fr; }
+@media (max-width: 420px) {
+  .types-list-toolbar .el-button { padding-inline: 8px; }
 }
 .parameter-fields { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--ops-border); }
 .parameter-fields-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }

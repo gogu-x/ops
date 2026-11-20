@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gogu-x/ops/admin/internal/application"
 	"github.com/gogu-x/ops/admin/internal/auth"
+	"github.com/gogu-x/ops/admin/internal/autoopen"
 	"github.com/gogu-x/ops/admin/internal/environment"
 	"github.com/gogu-x/ops/admin/internal/project"
 	"github.com/gogu-x/ops/admin/internal/rollout"
@@ -30,6 +31,7 @@ type AdminService struct {
 	app                      *application.Service
 	operations               *serviceOperationManager
 	rollouts                 *rollout.Manager
+	autoOpen                 *autoopen.Manager
 }
 
 // NewAdminService wires the admin actor's dependencies: a Mongo-backed auth
@@ -48,17 +50,22 @@ func NewAdminService(mongodbData *mongo.Database) *AdminService {
 		instance.NewMongoRepository(mongodbData),
 	)
 	var rolloutRepo rollout.Repository
+	var autoOpenRepo autoopen.Repository
 	if mongodbData == nil {
 		rolloutRepo = rollout.NewMemoryRepository()
+		autoOpenRepo = autoopen.NewMemoryRepository()
 	} else {
 		rolloutRepo = rollout.NewMongoRepository(mongodbData)
+		autoOpenRepo = autoopen.NewMongoRepository(mongodbData)
 	}
+	operations := newServiceOperationManager(app, rolloutRepo)
 	return &AdminService{
 		ensureServiceTypeIndexes: serviceTypes.EnsureIndexes,
 		auth:                     auth.NewService(authRepo),
 		app:                      app,
 		rollouts:                 rollout.NewManager(rolloutRepo, app),
-		operations:               newServiceOperationManager(app, rolloutRepo),
+		operations:               operations,
+		autoOpen:                 autoopen.NewManager(autoOpenRepo, app, authRepo, operations.reserve),
 	}
 }
 
@@ -80,6 +87,9 @@ func (a *AdminService) OnInit(_ tree.Context) {
 	if err := a.rollouts.Start(); err != nil {
 		panic("initialize rollout manager: " + err.Error())
 	}
+	if err := a.autoOpen.Start(); err != nil {
+		panic("initialize auto-open manager: " + err.Error())
+	}
 	gin.SetMode(gin.ReleaseMode)
 	router := a.newRouter()
 	a.http = &http.Server{Addr: fmt.Sprintf("0.0.0.0:%v", conf.Addr), Handler: router, ReadHeaderTimeout: 5 * time.Second}
@@ -96,6 +106,9 @@ func (a *AdminService) HandleMessage(_ tree.Context, _ interface{}) {}
 func (a *AdminService) OnStop(_ tree.Context) {
 	if a.rollouts != nil {
 		a.rollouts.Stop()
+	}
+	if a.autoOpen != nil {
+		a.autoOpen.Stop()
 	}
 	if a.http != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

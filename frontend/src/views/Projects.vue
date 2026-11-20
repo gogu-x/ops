@@ -163,11 +163,11 @@ onMounted(loadAll)
 <template>
   <AppLayout>
     <div class="page-content-loading" v-loading="loading">
-    <div class="page-heading page-heading-modern page-heading-actions-only">
-      <el-button v-if="canManage" type="primary" :icon="Plus" @click="openCreate">新建项目</el-button>
-    </div>
-
     <el-card class="plain-card" shadow="never">
+      <header class="ops-list-toolbar is-flat">
+        <h2>项目列表</h2>
+        <el-button v-if="canManage" type="primary" :icon="Plus" @click="openCreate">新建项目</el-button>
+      </header>
       <div class="project-list">
         <div v-for="row in projects" :key="row.id" class="project-item">
           <div class="project-item-icon">
@@ -400,7 +400,6 @@ onMounted(loadAll)
 .project-detail-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 13px 18px; border-top: 1px solid var(--ops-border); background: #fff; }
 
 @media (max-width: 760px) {
-  .page-heading-modern { flex-direction: column; }
   .project-list { gap: 10px; }
   .project-item { min-height: 0; padding: 14px; flex-wrap: wrap; }
   .project-item-actions { width: 100%; padding-top: 10px; }
