@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElDialog, ElMessage, ElMessageBox } from 'element-plus'
 import { Delete, Plus, Refresh, Search } from '@element-plus/icons-vue'
+import ResizableDrawer from '../components/ResizableDrawer.vue'
 import AppLayout from '../components/AppLayout.vue'
 import { useAuthStore } from '../stores/auth'
 import { serviceApi, type ServiceParameterField, type ServiceType, type ServiceTypeForm } from '../api/services'
@@ -140,29 +141,41 @@ onMounted(loadAll)
   <AppLayout>
     <div class="page-content-loading" v-loading="loading">
       <el-alert v-if="loadError" class="types-list-error" :title="loadError" type="error" show-icon :closable="false" />
-      <section class="types-list" aria-labelledby="types-list-heading">
+      <section class="types-list ops-list-panel" aria-labelledby="types-list-heading">
         <header class="ops-list-toolbar types-list-toolbar">
-          <h2 id="types-list-heading">类型列表</h2>
+          <h2 id="types-list-heading">服务类型 <small>{{ filteredTypes.length }}</small></h2>
           <div class="ops-list-toolbar-actions">
             <el-input v-model="keyword" class="types-search" :prefix-icon="Search" clearable placeholder="搜索类型名称" aria-label="搜索类型名称" />
             <el-button :icon="Refresh" :loading="loading" @click="loadAll">刷新</el-button>
             <el-button v-if="canManage" :icon="Plus" type="primary" @click="openCreateType">新建服务类型</el-button>
           </div>
         </header>
-        <el-table :data="filteredTypes" row-key="id" empty-text="没有符合条件的服务类型">
-          <el-table-column prop="name" label="类型名称" min-width="150" />
-          <el-table-column label="启动参数表单" min-width="135"><template #default="{ row }">{{ row.parameter_fields?.length ? `${row.parameter_fields.length} 个字段` : '未配置' }}</template></el-table-column>
-          <el-table-column label="操作" width="128" fixed="right">
-            <template #default="{ row }">
-              <el-button link type="primary" @click="openType(row)">{{ canManage ? '编辑' : '查看' }}</el-button>
-              <el-button v-if="canManage" link type="danger" @click="removeType(row)">删除</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
+        <div class="type-row type-columns" aria-hidden="true"><span>类型名称</span><span>启动参数</span><span>操作</span></div>
+        <ul class="type-list-rows">
+          <li v-for="type in filteredTypes" :key="type.id" class="type-row">
+            <button type="button" class="type-name" @click="openType(type)">{{ type.name }}</button>
+            <div class="type-parameters">
+              <template v-if="type.parameter_fields?.length">
+                <span>{{ type.parameter_fields.length }} 个字段</span>
+                <code v-for="(field, index) in type.parameter_fields.slice(0, 2)" :key="index">{{ field.flag || field.label }}</code>
+              </template>
+              <span v-else>未配置启动参数</span>
+            </div>
+            <div class="type-actions">
+              <el-button link type="primary" @click="openType(type)">详情</el-button>
+              <el-button v-if="canManage" link type="danger" @click="removeType(type)">删除</el-button>
+            </div>
+          </li>
+        </ul>
+        <el-empty v-if="!loading && !loadError && !filteredTypes.length" :description="keyword.trim() ? '没有符合条件的服务类型' : '暂无服务类型'" :image-size="60" />
+
       </section>
     </div>
     <!-- 服务类型表单 -->
-    <el-dialog v-model="typeDialogVisible" :title="canManage ? (editingTypeId ? '编辑服务类型' : '添加服务类型') : '服务类型详情'" width="min(680px, 94vw)" destroy-on-close>
+    <component :is="editingTypeId ? ResizableDrawer : ElDialog" v-model="typeDialogVisible"
+      :title="editingTypeId ? '服务类型详情' : '添加服务类型'"
+      v-bind="editingTypeId ? { size: 'min(600px, 100vw)', direction: 'rtl' } : { width: 'min(680px, 94vw)' }"
+      destroy-on-close>
       <el-form label-width="100px" :disabled="!canManage">
         <el-form-item label="类型名称" required>
           <el-input v-model="typeForm.name" placeholder="例如 game、battle、gate" />
@@ -223,17 +236,29 @@ onMounted(loadAll)
         <el-button @click="typeDialogVisible = false">{{ canManage ? '取消' : '关闭' }}</el-button>
         <el-button v-if="canManage" type="primary" :loading="submitting" @click="saveType">保存</el-button>
       </template>
-    </el-dialog>
+    </component>
   </AppLayout>
 </template>
 
 <style scoped>
 .types-list-error { margin-bottom: 12px; }
-.types-list { overflow: hidden; border: 1px solid var(--ops-border); border-radius: 12px; background: #fff; }
-.types-list-toolbar { border-bottom: 1px solid var(--ops-border); }
 .types-search { width: 215px; min-width: 0; }
-.types-list :deep(.el-table) { --el-table-header-bg-color: #f7f9fc; }
-.types-list :deep(.el-table__cell) { padding: 12px 0; }
+.types-list-toolbar small { font-size: 13px; font-weight: 400; color: var(--ops-text-secondary); }
+.type-list-rows { margin: 0; padding: 0; list-style: none; }
+.type-row { display: grid; grid-template-columns: minmax(120px, 2fr) minmax(150px, 3fr) auto; align-items: center; gap: 12px; padding: 12px 18px; }
+.type-row + .type-row { border-top: 1px solid var(--ops-border); }
+.type-columns { color: var(--ops-text-secondary); background: #f7f9fc; font-size: 12px; }
+.type-name { justify-self: start; max-width: 100%; padding: 0; border: 0; background: transparent; font: inherit; font-weight: 600; color: var(--ops-text); text-align: left; overflow-wrap: anywhere; cursor: pointer; }
+.type-name:hover { color: var(--ops-primary); }
+.type-parameters { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 12px; color: var(--ops-text-secondary); }
+.type-parameters code { padding: 2px 5px; background: #f2f5fa; border-radius: 4px; overflow-wrap: anywhere; min-width: 0; }
+.type-actions { white-space: nowrap; }
+@media (max-width: 600px) {
+  .type-columns { display: none; }
+  .type-list-rows .type-row { grid-template-columns: minmax(0, 1fr) auto; gap: 5px 12px; padding: 12px; }
+  .type-parameters { grid-column: 1; }
+  .type-actions { grid-column: 2; grid-row: 1 / 3; }
+}
 @media (max-width: 420px) {
   .types-list-toolbar .el-button { padding-inline: 8px; }
 }

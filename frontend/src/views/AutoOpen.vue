@@ -1,7 +1,8 @@
 <script setup lang="ts">
+import ResizableDrawer from '../components/ResizableDrawer.vue'
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Calendar, CircleCheck, Clock, Collection, Plus, Search, Warning } from '@element-plus/icons-vue'
+import { Calendar, Plus, Search } from '@element-plus/icons-vue'
 import AppLayout from '../components/AppLayout.vue'
 import { autoOpenApi, type AutoOpenPolicy, type AutoOpenSettings, type AutoOpenTemplate } from '../api/autoOpen'
 import { environmentApi, type Environment } from '../api/environments'
@@ -34,22 +35,15 @@ const selectedTemplate = computed(() => templates.value.find(item => item.id ===
 const records = computed(() => policies.value.find(item => item.id === recordsId.value))
 
 const filters = [
-  { key: 'all', label: '全部策略', icon: Collection },
-  { key: 'enabled', label: '已启用', icon: Clock },
-  { key: 'completed', label: '已完成', icon: CircleCheck },
-  { key: 'failed', label: '执行失败', icon: Warning },
+  { key: 'all', label: '全部策略' },
+  { key: 'enabled', label: '已启用' },
+  { key: 'completed', label: '已完成' },
+  { key: 'failed', label: '执行失败' },
 ] as const
 
 type PolicyFilter = typeof filters[number]['key']
 
 const policyRows = computed(() => policies.value.map(policy => ({ ...policy, state: status(policy) })))
-const counts = computed(() => {
-  const totals = { all: policyRows.value.length, enabled: 0, completed: 0, failed: 0 }
-  for (const { state } of policyRows.value) {
-    if (state.key !== 'disabled') totals[state.key]++
-  }
-  return totals
-})
 const visiblePolicies = computed(() => {
   const term = keyword.value.trim().toLowerCase()
   return policyRows.value.filter(policy => {
@@ -195,28 +189,15 @@ onUnmounted(() => { if (polling) clearInterval(polling) })
 
 <template>
   <AppLayout>
-    <div class="auto-open-page">
+    <div class="auto-open-page page-content-loading" v-loading="loading">
       <el-alert v-if="loadError" class="load-error" :title="loadError" type="error" :closable="false" show-icon />
-      <div v-if="!loadError || policies.length" class="policy-overview" role="group" aria-label="按状态筛选策略">
-        <button
-          v-for="filter in filters"
-          :key="filter.key"
-          type="button"
-          class="overview-card"
-          :data-kind="filter.key"
-          :aria-pressed="statusFilter === filter.key"
-          @click="statusFilter = filter.key"
-        >
-          <span class="overview-icon" aria-hidden="true"><el-icon><component :is="filter.icon" /></el-icon></span>
-          <span class="overview-label">{{ filter.label }}</span>
-          <strong class="overview-value">{{ loading ? '—' : counts[filter.key] }}</strong>
-        </button>
-      </div>
-
-      <section class="policy-list" aria-labelledby="policy-list-heading" v-loading="loading">
+      <section class="policy-list ops-list-panel" aria-labelledby="policy-list-heading">
         <header class="policy-list-header ops-list-toolbar">
           <h2 id="policy-list-heading">策略列表</h2>
           <div class="ops-list-toolbar-actions">
+            <el-select v-if="policies.length" v-model="statusFilter" class="policy-status-filter" aria-label="按状态筛选策略">
+              <el-option v-for="filter in filters" :key="filter.key" :value="filter.key" :label="filter.label" />
+            </el-select>
             <el-input
               v-if="policies.length"
               v-model="keyword"
@@ -290,7 +271,7 @@ onUnmounted(() => { if (polling) clearInterval(polling) })
         </div>
       </section>
 
-      <el-drawer
+      <ResizableDrawer
         v-model="editorVisible"
         :title="editing ? '编辑开服策略' : '新建开服策略'"
         direction="rtl"
@@ -371,9 +352,9 @@ onUnmounted(() => { if (polling) clearInterval(polling) })
             </div>
           </div>
         </template>
-      </el-drawer>
+      </ResizableDrawer>
 
-      <el-drawer
+      <ResizableDrawer
         v-model="enableVisible"
         title="启用自动开服"
         direction="rtl"
@@ -412,7 +393,7 @@ onUnmounted(() => { if (polling) clearInterval(polling) })
             <el-button type="primary" :loading="!!changingId" :disabled="!enableTarget" @click="enableTarget && updateEnabled(enableTarget, true)">启用策略</el-button>
           </div>
         </template>
-      </el-drawer>
+      </ResizableDrawer>
 
       <el-dialog :model-value="!!recordsId" :title="records ? `${records.name} · 开服记录` : '开服记录'" width="min(750px, 94vw)" @update:model-value="recordsId = ''">
         <el-table :data="records?.recent_runs || []" empty-text="暂无开服记录" max-height="440">
@@ -437,19 +418,9 @@ onUnmounted(() => { if (polling) clearInterval(polling) })
 
 <style scoped>
 .auto-open-page { width: 100%; min-width: 0; }
-.overview-icon, .empty-icon { display: grid; flex: none; place-items: center; }
-.policy-overview { display: grid; grid-template-columns: repeat(4, minmax(168px, 1fr)); gap: 12px; margin-bottom: 16px; overflow-x: auto; }
-.overview-card { display: flex; align-items: center; gap: 10px; min-height: 66px; padding: 11px 14px; border: 1px solid var(--ops-border); border-radius: 12px; background: #fff; font: inherit; text-align: left; cursor: pointer; white-space: nowrap; }
-.overview-card:hover { border-color: #b8cdfa; }
-.overview-card[aria-pressed="true"] { border-color: #9cb9fa; background: #f7faff; }
-.overview-card:focus-visible, .policy-table-scroll:focus-visible { outline: 2px solid var(--ops-primary); outline-offset: -2px; }
-.overview-icon { width: 32px; height: 32px; border-radius: 9px; background: var(--ops-primary-light); color: var(--ops-primary); font-size: 18px; }
-.overview-card[data-kind="completed"] .overview-icon { background: #e7f6ef; color: #20785e; }
-.overview-card[data-kind="failed"] .overview-icon { background: #fceff0; color: #b73547; }
-.overview-label { color: #566780; font-size: 13px; }
-.overview-value { margin-left: auto; color: var(--ops-text); font-size: 22px; font-variant-numeric: tabular-nums; line-height: 1; }
-.policy-list { position: relative; overflow: hidden; border: 1px solid var(--ops-border); border-radius: 14px; background: #fff; box-shadow: var(--ops-shadow); }
-.policy-list-header { border-bottom: 1px solid var(--ops-border); }
+.empty-icon { display: grid; flex: none; place-items: center; }
+.policy-table-scroll:focus-visible { outline: 2px solid var(--ops-primary); outline-offset: -2px; }
+.policy-status-filter { width: 110px; }
 .policy-search { width: 245px; min-width: 0; }
 .policy-table-scroll { overflow-x: auto; }
 .policy-table { width: 100%; min-width: 976px; border-collapse: collapse; table-layout: fixed; text-align: left; white-space: nowrap; }
@@ -489,8 +460,8 @@ onUnmounted(() => { if (polling) clearInterval(polling) })
 .policy-empty strong { font-size: 14px; font-weight: 600; }
 .policy-empty p { margin: 0; color: var(--ops-text-secondary); font-size: 12px; }
 .load-error { margin-bottom: 12px; }
-.policy-overview::-webkit-scrollbar, .policy-table-scroll::-webkit-scrollbar { display: block; height: 5px; }
-.policy-overview::-webkit-scrollbar-thumb, .policy-table-scroll::-webkit-scrollbar-thumb { border-radius: 5px; background: #cbd7e9; }
+.policy-table-scroll::-webkit-scrollbar { display: block; height: 5px; }
+.policy-table-scroll::-webkit-scrollbar-thumb { border-radius: 5px; background: #cbd7e9; }
 small { display: block; margin-top: 4px; color: var(--ops-text-secondary); font-size: 11px; line-height: 1.5; }
 .field-error { color: var(--el-color-danger); white-space: normal; overflow-wrap: anywhere; }
 .auto-open-page :deep(.policy-drawer .el-drawer__header) { margin-bottom: 0; padding: 21px 24px 18px; border-bottom: 1px solid var(--ops-border); }

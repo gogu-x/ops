@@ -77,11 +77,13 @@ async function logout() {
 .account-button { display: flex; gap: 9px; align-items: center; padding: 5px 0 5px 10px; border: 0; background: transparent; color: #fff; font: inherit; cursor: pointer; }
 .account-avatar { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: rgba(255, 255, 255, .14); color: #fff; font-size: 12px; }
 .account-name { font-size: 12px; }
-.app-main { width: 100%; max-width: 1600px; min-width: 0; flex: 1; margin: 0 auto; padding: 28px 32px; box-sizing: border-box; }
+.app-main { width: 100%; min-width: 0; flex: 1; margin: 0 auto; padding: 28px 32px; box-sizing: border-box; }
+.app-shell:not(.is-workspace) .app-main { margin: 0; padding-inline: var(--page-gutter, 28px); }
 .is-workspace { height: 100dvh; min-height: 0; display: flex; flex-direction: row; overflow: hidden; background: #fff; }
 .is-workspace .app-header { min-height: 0; height: 100%; flex: 0 0 220px; }
 .is-workspace .app-main { display: flex; width: auto; max-width: none; min-height: 0; flex: 1; padding: 0; }
 @media (max-width: 1000px) and (min-width: 761px) {
+  .app-shell { --page-gutter: 20px; }
   .app-header { width: 64px; flex-basis: 64px; align-items: center; padding: 18px 8px 12px; gap: 26px; }
   .app-brand > span:last-child, .app-navigation a > span, .account-name { display: none; }
   .app-brand { justify-content: center; }
@@ -94,6 +96,7 @@ async function logout() {
   .app-main { padding: 24px 20px; }
 }
 @media (max-width: 760px) {
+  .app-shell { --page-gutter: 18px; }
   .app-shell { flex-direction: column; }
   .app-header { position: relative; width: 100%; min-height: 58px; height: 58px; flex: 0 0 58px; flex-direction: row; align-items: center; gap: 20px; padding: 0 16px; background: #fff; border-right: 0; border-bottom: 1px solid var(--ops-border); overflow: visible; }
   .app-brand { color: var(--ops-text); }
@@ -112,6 +115,7 @@ async function logout() {
   .is-workspace .app-main { width: 100%; flex: 1; padding: 0 0 calc(64px + env(safe-area-inset-bottom)); box-sizing: border-box; }
 }
 @media (max-width: 480px) {
+  .app-shell { --page-gutter: 12px; }
   .app-header { gap: 10px; padding: 0 10px; }
   .app-brand { gap: 6px; font-size: 17px; }
   .brand-symbol { width: 25px; height: 25px; font-size: 15px; }

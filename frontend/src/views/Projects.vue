@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ResizableDrawer from '../components/ResizableDrawer.vue'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -163,13 +164,13 @@ onMounted(loadAll)
 <template>
   <AppLayout>
     <div class="page-content-loading" v-loading="loading">
-    <el-card class="plain-card" shadow="never">
-      <header class="ops-list-toolbar is-flat">
+    <section class="ops-list-panel">
+      <header class="ops-list-toolbar">
         <h2>项目列表</h2>
         <el-button v-if="canManage" type="primary" :icon="Plus" @click="openCreate">新建项目</el-button>
       </header>
       <div class="project-list">
-        <div v-for="row in projects" :key="row.id" class="project-item">
+        <div v-for="row in projects" :key="row.id" class="project-item ops-list-row">
           <div class="project-item-icon">
             <el-icon :size="16"><FolderOpened /></el-icon>
           </div>
@@ -192,7 +193,7 @@ onMounted(loadAll)
         </div>
         <el-empty v-if="!loading && !projects.length" description="暂无项目，请先新建项目" :image-size="60" />
       </div>
-    </el-card>
+    </section>
     </div>
 
     <el-dialog v-model="dialogVisible" title="新建项目" width="760px" destroy-on-close>
@@ -238,7 +239,7 @@ onMounted(loadAll)
       </template>
     </el-dialog>
 
-    <el-drawer v-model="detailVisible" direction="rtl" size="520px" :with-header="false">
+    <ResizableDrawer v-model="detailVisible" direction="rtl" size="520px" :with-header="false">
       <div v-if="activeProject" class="project-detail-panel">
         <div class="project-detail-header">
           <div class="project-detail-header-main"><span class="project-detail-icon"><el-icon><FolderOpened /></el-icon></span><div class="project-detail-header-info"><div class="project-detail-title">项目详情</div><div class="project-detail-name">{{ activeProject.name }}</div></div><el-button class="project-detail-close" circle :icon="Close" aria-label="关闭项目详情" @click="detailVisible = false" /></div>
@@ -263,39 +264,11 @@ onMounted(loadAll)
         </el-form>
         <div v-if="canManage" class="project-detail-footer"><template v-if="detailEditing"><el-button @click="detailEditing = false; editingId = ''">取消</el-button><el-button type="primary" :loading="submitting" @click="saveProjectDetail">保存</el-button></template><template v-else><el-button :icon="Edit" @click="beginProjectEdit(activeProject)">编辑</el-button><el-button type="primary" @click="detailVisible = false; router.push({ path: '/services', query: { project: activeProject!.id } })">查看服务</el-button></template></div>
       </div>
-    </el-drawer>
+    </ResizableDrawer>
   </AppLayout>
 </template>
 
 <style scoped>
-.plain-card {
-  border: 0;
-  background: transparent;
-}
-
-.plain-card :deep(.el-card__body) {
-  padding: 0;
-}
-
-.project-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.project-item {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  min-height: 88px;
-  padding: 18px 20px;
-  border: 1px solid var(--ops-border);
-  border-radius: 12px;
-  background: #fff;
-  box-shadow: 0 2px 8px rgba(28, 47, 78, .035);
-  transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease;
-}
-.project-item:hover { border-color: #d8e2f3; background: #fff; box-shadow: 0 5px 16px rgba(28, 47, 78, .07); transform: translateY(-1px); }
 .project-entry { padding: 0; font: inherit; border: 0; background: transparent; cursor: pointer; }
 .project-entry:hover { color: var(--ops-primary); }
 
@@ -400,7 +373,6 @@ onMounted(loadAll)
 .project-detail-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 13px 18px; border-top: 1px solid var(--ops-border); background: #fff; }
 
 @media (max-width: 760px) {
-  .project-list { gap: 10px; }
   .project-item { min-height: 0; padding: 14px; flex-wrap: wrap; }
   .project-item-actions { width: 100%; padding-top: 10px; }
   :deep(.el-dialog) { width: calc(100vw - 24px) !important; margin-top: 3vh !important; }

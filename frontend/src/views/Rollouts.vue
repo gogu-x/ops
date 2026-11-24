@@ -395,7 +395,7 @@ onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
   <AppLayout>
     <div class="page-content-loading rollouts-page" v-loading="loading">
       <el-alert v-if="loadError" class="rollout-list-error" :title="loadError" type="error" show-icon :closable="false" />
-      <section class="task-list" aria-labelledby="rollout-list-heading">
+      <section class="task-list ops-list-panel" aria-labelledby="rollout-list-heading">
         <header class="task-list-header ops-list-toolbar">
           <div class="task-list-title">
             <h2 id="rollout-list-heading">任务列表</h2>
@@ -573,9 +573,7 @@ onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
 
 <style scoped>
 .rollouts-page { width: 100%; min-width: 0; }
-.task-list { overflow: hidden; border: 1px solid var(--ops-border); border-radius: 12px; background: #fff; box-shadow: 0 2px 8px rgba(28, 47, 78, .035); }
 .rollout-list-error { margin-bottom: 12px; }
-.task-list-header { border-bottom: 1px solid var(--ops-border); }
 .task-list-title { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .task-list-title small { color: var(--ops-text-secondary); font-size: 12px; }
 .rollout-table { --el-table-header-bg-color: #f7f9fc; --el-table-row-hover-bg-color: #f8faff; }

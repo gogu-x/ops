@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ResizableDrawer from '../components/ResizableDrawer.vue'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Connection, Delete, Monitor, View, Close } from '@element-plus/icons-vue'
@@ -226,13 +227,13 @@ onMounted(loadHosts)
 <template>
   <AppLayout>
     <div class="page-content-loading" v-loading="loading">
-    <el-card class="plain-card" shadow="never">
-      <header class="ops-list-toolbar is-flat">
+    <section class="ops-list-panel">
+      <header class="ops-list-toolbar">
         <h2>主机列表</h2>
         <el-button v-if="canManage()" type="primary" :icon="Plus" @click="openCreate">添加主机</el-button>
       </header>
       <div class="host-list">
-        <div v-for="row in hosts" :key="row.id" class="host-item">
+        <div v-for="row in hosts" :key="row.id" class="host-item ops-list-row">
           <div class="host-item-icon">
             <el-icon :size="16"><Monitor /></el-icon>
           </div>
@@ -263,7 +264,7 @@ onMounted(loadHosts)
         </div>
         <el-empty v-if="!loading && !hosts.length" description="暂无主机，请先添加主机" :image-size="60" />
       </div>
-    </el-card>
+    </section>
     </div>
 
     <el-dialog v-model="dialogVisible" title="添加主机" width="680px" destroy-on-close>
@@ -310,7 +311,7 @@ onMounted(loadHosts)
       </template>
     </el-dialog>
 
-    <el-drawer v-model="detailVisible" direction="rtl" size="520px" :with-header="false">
+    <ResizableDrawer v-model="detailVisible" direction="rtl" size="520px" :with-header="false">
       <div v-if="activeHost" class="host-detail-panel">
         <div class="host-detail-header">
           <div class="host-detail-header-main">
@@ -364,40 +365,11 @@ onMounted(loadHosts)
         </el-form>
         <div class="host-detail-footer"><template v-if="detailEditing"><span class="host-test-hint" :class="{ 'is-passed': connectionTestPassed }">{{ connectionTestPassed ? '当前连接和证书验证通过' : '请先测试当前地址及证书' }}</span><el-button @click="cancelHostEdit">取消</el-button><el-button type="primary" :disabled="!connectionTestPassed || detailConfigLoading" :loading="detailSaving" @click="saveHostEdit">保存</el-button></template><el-button v-else-if="canManage()" type="primary" :icon="View" @click="beginHostEdit(activeHost)">编辑主机</el-button></div>
       </div>
-    </el-drawer>
+    </ResizableDrawer>
   </AppLayout>
 </template>
 
 <style scoped>
-.plain-card {
-  border: 0;
-  background: transparent;
-}
-
-.plain-card :deep(.el-card__body) {
-  padding: 0;
-}
-
-.host-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.host-item {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  min-height: 88px;
-  padding: 16px 20px;
-  border: 1px solid var(--ops-border);
-  border-radius: 12px;
-  background: #fff;
-  box-shadow: 0 2px 8px rgba(28, 47, 78, .035);
-  transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease;
-}
-.host-item:hover { border-color: #d8e2f3; box-shadow: 0 5px 16px rgba(28, 47, 78, .07); transform: translateY(-1px); }
-
 .host-item-icon {
   flex-shrink: 0;
   width: 38px;
@@ -484,7 +456,6 @@ onMounted(loadHosts)
 .host-test-hint.is-passed { color: #218263; }
 
 @media (max-width: 760px) {
-  .host-list { gap: 10px; }
   .host-item { display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 12px; padding: 14px; }
   .host-item-actions { grid-column: 1 / -1; width: 100%; padding-top: 10px; border-top: 1px solid #eef1f5; }
   .host-item-actions .el-button { flex: 1; }

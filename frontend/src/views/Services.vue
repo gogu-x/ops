@@ -1,10 +1,11 @@
 <script setup lang="ts">
+import ResizableDrawer from '../components/ResizableDrawer.vue'
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Plus, Edit, Delete, Box, VideoPlay, VideoPause, RefreshRight, Refresh, Upload,
-  Search, MoreFilled, Close, ArrowRight, FolderOpened,
+  Search, MoreFilled, Close, ArrowRight, FolderOpened, Folder, CaretRight,
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '../stores/auth'
 import { environmentApi, type Environment, type EnvironmentForm } from '../api/environments'
@@ -26,7 +27,7 @@ const instances = ref<ServiceInstance[]>([])
 const hosts = ref<Host[]>([])
 const projects = ref<Project[]>([])
 const latestStartedAt = ref<Record<string, string>>({})
-const loading = ref(false)
+const loading = ref(true)
 const loadError = ref(false)
 const submitting = ref(false)
 const canManage = computed(() => auth.hasPermission('services.manage'))
@@ -53,6 +54,30 @@ const batchOperationImage = ref('')
 
 function environmentsInProject(projectId: string): Environment[] {
   return environments.value.filter((e) => e.project_id === projectId)
+}
+
+const treeSearch = ref('')
+const expandedProjects = reactive(new Set<string>())
+const collapsedSearchProjects = reactive(new Set<string>())
+const treeQuery = computed(() => treeSearch.value.trim().toLowerCase())
+const projectBranches = computed(() => projects.value.map(project => {
+  const matchesProject = project.name.toLowerCase().includes(treeQuery.value)
+  const children = environmentsInProject(project.id).filter(env =>
+    matchesProject || env.name.toLowerCase().includes(treeQuery.value))
+  return { project, children, matchesProject }
+}).filter(branch => branch.matchesProject || branch.children.length))
+
+watch(activeProjectId, id => { if (id) expandedProjects.add(id) }, { immediate: true })
+watch(treeQuery, () => collapsedSearchProjects.clear())
+
+function isProjectOpen(id: string) {
+  return treeQuery.value ? !collapsedSearchProjects.has(id) : expandedProjects.has(id)
+}
+
+function toggleProject(id: string) {
+  const set = treeQuery.value ? collapsedSearchProjects : expandedProjects
+  if (set.has(id)) set.delete(id)
+  else set.add(id)
 }
 
 function typesInEnvironment(environmentId: string): ServiceType[] {
@@ -105,11 +130,14 @@ const batchOperationGroups = computed(() => {
 const environmentInstanceCount = computed(() => environmentInstances.value.length)
 
 function selectProject(id: string) {
+  expandedProjects.add(id)
+  collapsedSearchProjects.delete(id)
   activeProjectId.value = id
   onProjectChange()
 }
 
-function selectEnvironment(id: string) {
+function selectEnvironment(projectId: string, id: string) {
+  activeProjectId.value = projectId
   activeEnvironmentId.value = id
   onEnvironmentChange()
 }
@@ -1202,23 +1230,39 @@ onUnmounted(() => {
 
 <template>
   <AppLayout fixed-viewport>
-    <div class="services-page" v-loading="loading && !projects.length">
+    <div class="services-page" v-loading="loading">
       <aside class="project-rail">
-        <div class="rail-heading"><span>我的项目</span><span>{{ projects.length }}</span></div>
-        <nav class="project-navigation" aria-label="选择项目">
-          <button v-for="project in projects" :key="project.id" class="project-nav-item" :class="{ active: activeProjectId === project.id }" :aria-pressed="activeProjectId === project.id" @click="selectProject(project.id)">
-            <span class="project-initial">{{ project.name.slice(0, 1).toUpperCase() }}</span>
-            <span class="project-nav-name">{{ project.name }}</span>
-            <el-icon v-if="activeProjectId === project.id" class="project-chevron"><ArrowRight /></el-icon>
-          </button>
+        <div class="rail-heading">项目与环境</div>
+        <el-input v-model="treeSearch" size="default" clearable :prefix-icon="Search" aria-label="搜索项目或环境" placeholder="搜索项目或环境" />
+        <nav class="project-navigation" aria-label="选择项目与环境">
+          <div v-for="{ project, children } in projectBranches" :key="project.id">
+            <div class="project-row">
+              <button v-if="children.length" class="branch-toggle" :aria-expanded="isProjectOpen(project.id)" :aria-label="project.name" @click="toggleProject(project.id)">
+                <el-icon :class="{ expanded: isProjectOpen(project.id) }"><CaretRight /></el-icon>
+              </button>
+              <button class="tree-item" :class="{ active: activeProjectId === project.id && !activeEnvironmentId }" @click="selectProject(project.id)">
+                <el-icon><Folder /></el-icon><span>{{ project.name }}</span>
+              </button>
+            </div>
+            <div v-if="children.length && isProjectOpen(project.id)" class="tree-children">
+              <button v-for="env in children" :key="env.id" class="tree-item" :aria-pressed="activeProjectId === project.id && activeEnvironmentId === env.id" @click="selectEnvironment(project.id, env.id)">
+                <el-icon><Folder /></el-icon><span>{{ env.name }}</span>
+              </button>
+            </div>
+          </div>
+          <p v-if="treeQuery && !projectBranches.length" class="tree-empty">无匹配项目或环境</p>
         </nav>
         <div class="rail-footer"><el-button text :icon="FolderOpened" @click="router.push('/projects')">管理项目</el-button></div>
       </aside>
+      <nav class="mobile-project-tabs" aria-label="选择项目">
+        <button v-for="project in projects" :key="project.id" :aria-pressed="activeProjectId === project.id" @click="selectProject(project.id)">{{ project.name }}</button>
+      </nav>
       <section class="service-workspace">
         <div v-if="activeProject" class="workspace-heading">
-          <div class="environment-tabs" aria-label="选择环境">
-            <button v-for="env in environmentsInProject(activeProjectId)" :key="env.id" :class="{ active: activeEnvironmentId === env.id }" :aria-pressed="activeEnvironmentId === env.id" @click="selectEnvironment(env.id)">{{ env.name }}</button>
-          </div>
+          <nav class="mobile-environment-tabs" aria-label="选择环境">
+            <button v-for="env in environmentsInProject(activeProjectId)" :key="env.id" :aria-pressed="activeEnvironmentId === env.id" @click="selectEnvironment(activeProjectId, env.id)">{{ env.name }}</button>
+          </nav>
+          <span class="scope-path">{{ activeProject.name }}<template v-if="activeEnvironment"> / {{ activeEnvironment.name }}</template></span>
           <div v-if="canManage" class="workspace-actions">
             <el-dropdown trigger="click">
               <el-button text :icon="MoreFilled" aria-label="项目内资源管理">管理</el-button>
@@ -1273,7 +1317,7 @@ onUnmounted(() => {
           <el-empty v-if="!types.length" description="暂无全局服务类型" :image-size="60">
             <el-button v-if="canManage" :icon="Plus" @click="openServiceTypes">查看服务类型</el-button>
           </el-empty>
-          <div v-else class="master-detail" v-loading="loading">
+          <div v-else class="master-detail">
             <section class="instance-panel">
               <div class="mobile-instance-list">
                 <article v-for="row in filteredInstances" :key="row.id" class="mobile-instance">
@@ -1326,7 +1370,7 @@ onUnmounted(() => {
             </section>
 
           <!-- 实例详情抽屉，与主机详情使用相同的右侧抽屉交互 -->
-          <el-drawer
+          <ResizableDrawer
             v-model="detailVisible"
             direction="rtl"
             size="520px"
@@ -1547,9 +1591,9 @@ onUnmounted(() => {
               </el-tab-pane>
               </el-tabs>
             </div>
-          </el-drawer>
+          </ResizableDrawer>
 
-          <el-drawer
+          <ResizableDrawer
             v-model="batchOperationDrawerVisible"
             direction="rtl"
             size="560px"
@@ -1638,7 +1682,7 @@ onUnmounted(() => {
                 </div>
               </footer>
             </div>
-          </el-drawer>
+          </ResizableDrawer>
         </div>
         </template>
       </section>
@@ -1786,23 +1830,38 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.mobile-project-tabs, .mobile-environment-tabs { display: none; }
 .services-page { display: flex; flex: 1; min-width: 0; min-height: 0; overflow: hidden; background: #fff; }
 .project-rail { flex: 0 0 204px; width: 204px; display: flex; flex-direction: column; min-height: 0; padding: 25px 12px 16px; border-right: 1px solid var(--ops-border); background: #f7f9fc; }
-.rail-heading { display: flex; justify-content: space-between; padding: 0 12px 17px; color: var(--ops-text-secondary); font-size: 12px; }
-.project-navigation { min-height: 0; overflow-y: auto; }
-.project-nav-item { display: flex; align-items: center; width: 100%; gap: 10px; padding: 11px 10px; margin-bottom: 5px; border: 0; border-radius: 7px; background: transparent; color: var(--ops-text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
-.project-nav-item:hover { background: #eef2f8; }
-.project-nav-item.active { background: var(--ops-primary-light); color: var(--ops-primary); }
-.project-initial { display: grid; place-items: center; width: 28px; height: 28px; flex-shrink: 0; border: 1px solid var(--ops-border); border-radius: 6px; background: #fff; font-size: 12px; }
-.project-nav-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.project-chevron { margin-left: auto; flex-shrink: 0; font-size: 11px; }
+.rail-heading { display: flex; justify-content: space-between; padding: 0 6px 12px; color: var(--ops-text); font-size: 16px; font-weight: 600; }
+.project-navigation { margin-top: 8px; min-height: 0; overflow-y: auto; }
+.project-row, .tree-item, .branch-toggle { display: flex; align-items: center; }
+.tree-item, .branch-toggle { border: 0; background: transparent; color: var(--ops-text); cursor: pointer; }
+.tree-item { width: 100%; min-width: 0; min-height: 38px; gap: 8px; padding: 7px 6px; border-radius: 4px; font: inherit; font-size: 15px; text-align: left; }
+.tree-item span { overflow-wrap: anywhere; }
+.tree-item:hover, .branch-toggle:hover { background: var(--ops-bg); }
+.tree-item.active, .tree-item[aria-pressed="true"] { background: var(--ops-primary-light); color: var(--ops-text); }
+.branch-toggle { justify-content: center; width: 30px; height: 38px; flex-shrink: 0; font-size: 15px; }
+.branch-toggle .expanded { transform: rotate(90deg); }
+.project-row > .tree-item { font-weight: 600; }
+.project-row > .tree-item:only-child { margin-left: 30px; }
+.tree-children { --branch-length: 24px; --branch-color: #aab9ca; margin: 0 0 6px calc(15px + var(--branch-length)); }
+.tree-children > .tree-item { position: relative; padding-left: 12px; }
+.tree-item .el-icon { font-size: 17px; }
+.tree-children > .tree-item::before,
+.tree-children > .tree-item::after {
+  content: '';
+  position: absolute;
+  left: calc(0px - var(--branch-length));
+  pointer-events: none;
+}
+.tree-children > .tree-item::before { top: 0; bottom: 0; border-left: 1px dashed var(--branch-color); }
+.tree-children > .tree-item::after { top: 50%; width: var(--branch-length); border-top: 1px dashed var(--branch-color); }
+.tree-empty, .scope-path { font-size: 12px; color: var(--ops-text-secondary); }
 .rail-footer { margin-top: auto; padding-top: 20px; }
 .rail-footer .el-button { color: var(--ops-text-secondary); }
 .service-workspace { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 26px 30px 12px; }
 .workspace-heading { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-shrink: 0; }
-.environment-tabs { display: flex; align-items: center; gap: 3px; padding: 3px; background: var(--ops-bg); border-radius: 6px; min-width: 0; max-width: 100%; overflow-x: auto; }
-.environment-tabs button { flex-shrink: 0; padding: 5px 12px; background: transparent; border: 0; border-radius: 4px; font: inherit; font-size: 12px; color: var(--ops-text-secondary); cursor: pointer; }
-.environment-tabs button.active { background: #fff; color: var(--ops-text); box-shadow: 0 1px 4px #17294512; }
 .workspace-actions { flex-shrink: 0; margin-left: auto; }
 .service-filter-bar { display: flex; align-items: center; gap: 16px; border-bottom: 1px solid var(--ops-border); flex-shrink: 0; }
 .type-tabs { display: flex; min-width: 0; gap: 23px; overflow-x: auto; }
@@ -2104,18 +2163,22 @@ onUnmounted(() => {
   .mobile-instance-bottom { display: flex; justify-content: space-between; align-items: center; margin-top: 9px; gap: 10px; }
   .mobile-instance-bottom > span { color: var(--ops-text-secondary); font-size: 12px; }
   .services-page { flex-direction: column; }
-  .project-rail { flex: 0 0 auto; width: 100%; padding: 8px 12px; border-right: 0; border-bottom: 1px solid var(--ops-border); }
-  .rail-heading, .rail-footer, .project-initial, .project-chevron { display: none; }
-  .project-navigation { display: flex; gap: 6px; overflow-x: auto; }
-  .project-nav-item { width: auto; flex-shrink: 0; margin: 0; padding: 8px 12px; }
-  .project-nav-name { max-width: 160px; }
+  .project-rail, .scope-path { display: none; }
+  .mobile-project-tabs, .mobile-environment-tabs { display: flex; min-width: 0; overflow-x: auto; }
+  .mobile-project-tabs { flex-shrink: 0; gap: 6px; padding: 8px 12px; background: #f7f9fc; border-bottom: 1px solid var(--ops-border); }
+  .mobile-environment-tabs { gap: 3px; padding: 3px; background: var(--ops-bg); border-radius: 6px; }
+  .mobile-project-tabs button, .mobile-environment-tabs button { flex-shrink: 0; border: 0; border-radius: 4px; background: transparent; color: var(--ops-text); font: inherit; cursor: pointer; }
+  .mobile-project-tabs button { max-width: 184px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 8px 12px; font-size: 13px; }
+  .mobile-project-tabs button[aria-pressed="true"] { background: var(--ops-primary-light); color: var(--ops-primary); }
+  .mobile-environment-tabs button { padding: 5px 8px; font-size: 12px; }
+  .mobile-environment-tabs button[aria-pressed="true"] { background: white; box-shadow: 0 1px 4px #17294512; }
+
   .service-workspace { padding: 16px 14px 10px; }
   .workspace-heading { margin-bottom: 8px; }
   .bulk-task-panel { margin: 7px 0; padding: 10px; }
   .bulk-task-progress { flex-wrap: wrap; }
   .bulk-task-progress .el-progress { flex-basis: 100%; }
   .bulk-task-progress > span { margin-left: auto; }
-  .environment-tabs button { padding: 5px 8px; }
   :deep(.el-drawer) { width: min(560px, 100vw) !important; }
   .resource-metric-grid, .resource-secondary-grid { gap: 7px; }
   .resource-metric-card, .resource-secondary-card { padding: 10px; }

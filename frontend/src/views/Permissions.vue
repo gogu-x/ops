@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ResizableDrawer from '../components/ResizableDrawer.vue'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Close, FolderOpened, Key, Plus, Refresh, Search, User } from '@element-plus/icons-vue'
@@ -176,8 +177,15 @@ onMounted(loadAll)
 <template>
   <AppLayout>
     <div class="access-page page-content-loading" v-loading="loading">
-      <el-card class="users-card" shadow="never">
-        <div class="table-heading"><div class="table-heading-copy"><h2>账号列表</h2></div><div class="table-tools"><el-input v-model="searchKeyword" class="user-search" clearable :prefix-icon="Search" placeholder="搜索用户、项目或权限" /><el-button class="refresh-button" text :icon="Refresh" :loading="loading" @click="loadAll">刷新</el-button><el-button class="add-user-button" type="primary" :icon="Plus" @click="openCreate">添加用户</el-button></div></div>
+      <section class="ops-list-panel">
+        <header class="ops-list-toolbar">
+          <h2>账号列表</h2>
+          <div class="ops-list-toolbar-actions">
+            <el-input v-model="searchKeyword" class="user-search" clearable :prefix-icon="Search" placeholder="搜索用户、项目或权限" />
+            <el-button :icon="Refresh" :loading="loading" @click="loadAll">刷新</el-button>
+            <el-button type="primary" :icon="Plus" @click="openCreate">添加用户</el-button>
+          </div>
+        </header>
         <el-table class="access-table" :data="filteredUsers" row-key="id" :empty-text="searchKeyword ? '没有匹配的用户' : '暂无用户'">
           <el-table-column label="用户" min-width="150"><template #default="{ row }"><div class="user-cell"><span class="user-avatar">{{ row.username.slice(0, 1).toUpperCase() }}</span><span><b>{{ row.username }}</b><small>{{ row.role === 'admin' ? '平台管理员' : '普通用户' }}</small></span></div></template></el-table-column>
           <el-table-column label="项目范围" min-width="190"><template #default="{ row }"><span class="scope-text">{{ projectLabels(row) }}</span></template></el-table-column>
@@ -185,7 +193,7 @@ onMounted(loadAll)
           <el-table-column label="状态" width="95"><template #default="{ row }"><el-tag :type="row.disabled ? 'info' : 'success'" size="small" effect="light">{{ row.disabled ? '已停用' : '正常' }}</el-tag></template></el-table-column>
           <el-table-column label="操作" width="100" fixed="right"><template #default="{ row }"><el-button link @click="openPassword(row)">重置密码</el-button></template></el-table-column>
         </el-table>
-      </el-card>
+      </section>
     </div>
 
     <el-dialog v-model="dialogVisible" width="860px" destroy-on-close class="access-dialog">
@@ -221,7 +229,7 @@ onMounted(loadAll)
       <template #footer><el-button @click="passwordDialogVisible = false">取消</el-button><el-button type="primary" :loading="saving" @click="savePassword">重置密码</el-button></template>
     </el-dialog>
 
-    <el-drawer v-model="detailVisible" direction="rtl" size="520px" :with-header="false">
+    <ResizableDrawer v-model="detailVisible" direction="rtl" size="520px" :with-header="false">
       <div v-if="activePermissionUser" class="permission-detail-panel">
         <div class="permission-detail-header">
           <div class="detail-header-main"><span class="permission-detail-icon"><el-icon><User /></el-icon></span><div class="detail-header-info"><div class="detail-title">用户权限</div><div class="detail-header-name">{{ activePermissionUser.username }}</div></div><el-button class="detail-close-button" circle :icon="Close" aria-label="关闭用户权限详情" @click="detailVisible = false" /></div>
@@ -250,7 +258,7 @@ onMounted(loadAll)
         </div>
         <div class="permission-detail-footer"><template v-if="permissionEditing"><el-button @click="permissionEditing = false; editingUserId = ''">取消</el-button><el-button type="primary" :loading="saving" @click="saveUser">保存</el-button></template><el-button v-else type="primary" :icon="Key" @click="openEdit(activePermissionUser!)">编辑权限</el-button></div>
       </div>
-    </el-drawer>
+    </ResizableDrawer>
   </AppLayout>
 </template>
 
@@ -273,7 +281,7 @@ onMounted(loadAll)
 .access-heading p { margin: 0; color: var(--ops-text-secondary); font-size: 13px; }
 .eyebrow { display: flex; align-items: center; gap: 7px; margin-bottom: 7px; color: #8390a3; font-size: 10px; font-weight: 650; letter-spacing: 1.7px; }
 .eyebrow-mark { width: 6px; height: 6px; border-radius: 50%; background: var(--ops-primary); box-shadow: 0 0 0 3px var(--ops-primary-light); }
-.add-user-button { height: 38px; padding: 0 16px; border-radius: 7px; box-shadow: 0 5px 12px rgba(56, 107, 232, .16); }
+
 .access-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-bottom: 18px; }
 .access-stats > div { display: flex; justify-content: space-between; align-items: center; min-height: 86px; padding: 16px 19px; border: 1px solid var(--ops-border); border-radius: 10px; background: linear-gradient(135deg, #fff 55%, #f9fbff); box-shadow: 0 2px 7px rgba(33, 52, 84, .025); }
 .access-stats > div > span { display: flex; align-items: center; gap: 10px; color: var(--ops-text-secondary); font-size: 13px; }
@@ -282,17 +290,17 @@ onMounted(loadAll)
 .stat-enabled .stat-icon { color: #239477; background: #e8f7f1; }
 .stat-admin .stat-icon { color: #b17c22; background: #fff5df; }
 .access-stats strong { font-size: 23px; font-weight: 670; font-variant-numeric: tabular-nums; }
-.users-card { border-color: var(--ops-border); border-radius: 10px; box-shadow: 0 2px 8px rgba(28, 47, 78, .025); }
-.users-card :deep(.el-card__body) { padding: 0 20px 16px; }
-.table-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 18px 0 15px; }
-.table-heading-copy { display: flex; flex-direction: column; gap: 4px; }
-.table-tools { display: flex; min-width: 0; align-items: center; gap: 8px; }
+
+
+
+
+
 .user-search { width: 260px; }
-.user-search :deep(.el-input__wrapper) { min-height: 34px; border-radius: 7px; box-shadow: 0 0 0 1px #e2e8f0 inset; }
+
 .section-kicker { color: #9aa5b5 !important; font-size: 9px !important; font-weight: 650; letter-spacing: 1.35px; }
-.table-heading h2 { margin: 0; color: var(--ops-text); font-size: 15px; font-weight: 650; }
-.table-heading-copy > span:last-child { color: var(--ops-text-secondary); font-size: 12px; }
-.refresh-button { color: #62738d; }
+
+
+
 .access-table { width: 100%; }
 .access-table :deep(th.el-table__cell) { height: 43px; background: #f8fafd; color: #77859a; font-size: 11px; font-weight: 600; }
 .access-table :deep(td.el-table__cell) { height: 65px; }
@@ -364,7 +372,7 @@ onMounted(loadAll)
 .readonly-tree-label.tree-group-label { font-weight: 600; }
 @media (max-width: 760px) {
   .access-heading { align-items: flex-start; }
-  .users-card :deep(.el-card__body) { padding: 0 12px 12px; }
+
   .access-table :deep(.el-table__body-wrapper) { overflow-x: auto; }
   .scope-text { max-width: 190px; }
   .user-search { width: 220px; }
@@ -374,9 +382,9 @@ onMounted(loadAll)
   .access-heading { gap: 12px; margin-bottom: 17px; }
   .access-heading h1 { font-size: 21px; }
   .access-heading p { max-width: 250px; line-height: 1.5; }
-  .add-user-button { height: 34px; padding: 0 10px; font-size: 12px; }
-  .table-heading { padding: 15px 0 12px; }
-  .table-tools { flex: 1; }
+
+
+
   .user-search { width: auto; min-width: 0; flex: 1; }
   .form-row { grid-template-columns: 1fr; gap: 0; }
   .role-row { gap: 0; }
