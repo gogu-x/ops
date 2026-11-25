@@ -22,58 +22,91 @@ const activePermissionUser = ref<ManagedUser | null>(null)
 const passwordForm = reactive({ password: '' })
 const form = reactive<UserAccessForm & { password: string }>({ username: '', role: 'user', project_ids: [], permissions: [], disabled: false, password: '' })
 const projectScopeRequired = computed(() => form.permissions.some(permission =>
-  permission !== 'service_types.view' && permission !== 'service_types.manage',
+  !permission.startsWith('service_types.'),
 ))
 const permissionTreeRef = ref<any>()
 const permissionTreeProps = { label: 'label', children: 'children' }
 
 const projectNameById = computed(() => new Map(projects.value.map((project) => [project.id, project.name])))
-const permissionOptions: { value: UserPermission; label: string; description: string }[] = [
-  { value: 'dashboard.view', label: '查看控制台', description: '查看首页运行概况和统计信息' },
-  { value: 'projects.view', label: '查看项目', description: '查看授权项目及环境概况' },
-  { value: 'services.view', label: '查看服务', description: '查看实例、镜像、运行状态、日志和事件' },
-  { value: 'services.manage', label: '管理服务', description: '在授权项目内部署、更新镜像、批量操作及滚动发布' },
-  { value: 'service_types.view', label: '查看全局服务类型', description: '查看服务类型和启动参数表单' },
-  { value: 'service_types.manage', label: '管理全局服务类型', description: '新增、修改和删除所有项目共用的服务类型' },
-  { value: 'rollout_templates.manage', label: '管理全局发布模板', description: '创建全局发布策略模板，需同时授予管理服务权限' },
-  { value: 'hosts.view', label: '查看主机', description: '查看授权项目关联的主机信息' },
-  { value: 'hosts.manage', label: '管理主机', description: '配置或删除主机并测试连接' },
-]
 const permissionTree = [
   {
-    id: 'dashboard', label: '控制台', description: '首页运行概况', children: [
+    id: 'overview', label: '控制台与项目概览', children: [
       { id: 'dashboard.view', label: '查看控制台', description: '查看首页运行概况和统计信息' },
-    ],
-  },
-  {
-    id: 'projects', label: '项目管理', description: '项目范围与项目信息', children: [
       { id: 'projects.view', label: '查看项目', description: '查看授权项目及环境概况' },
     ],
   },
   {
-    id: 'services', label: '服务管理', description: '实例、镜像及运行操作', children: [
+    id: 'environments', label: '项目环境', children: [
+      { id: 'services.environment_create', label: '新增环境', description: '新增环境' },
+      { id: 'services.environment_edit', label: '编辑环境', description: '编辑环境' },
+      { id: 'services.environment_delete', label: '删除环境', description: '删除环境' },
+    ],
+  },
+  {
+    id: 'instances', label: '服务实例', children: [
       { id: 'services.view', label: '查看服务', description: '查看实例、镜像、运行状态、日志和事件' },
-      { id: 'services.manage', label: '管理服务', description: '在授权项目内部署、更新镜像、批量操作及滚动发布' },
+      { id: 'services.create', label: '创建实例', description: '创建实例' },
+      { id: 'services.edit', label: '编辑实例配置', description: '编辑实例配置' },
+      { id: 'services.delete', label: '删除实例', description: '删除实例' },
     ],
   },
   {
-    id: 'service_types', label: '服务类型', description: '所有项目共用的服务类型配置', children: [
-      { id: 'service_types.view', label: '查看全局服务类型', description: '查看服务类型和启动参数表单' },
-      { id: 'service_types.manage', label: '管理全局服务类型', description: '新增、修改和删除所有项目共用的服务类型' },
+    id: 'containers', label: '容器与镜像', children: [
+      { id: 'services.deploy', label: '部署实例', description: '部署实例' },
+      { id: 'services.start', label: '启动实例', description: '启动实例' },
+      { id: 'services.stop', label: '停止实例', description: '停止实例' },
+      { id: 'services.restart', label: '重启实例', description: '重启实例' },
+      { id: 'services.update_image', label: '更新镜像', description: '更新镜像' },
+      { id: 'services.rollback', label: '回滚部署', description: '回滚部署' },
+      { id: 'services.remove_container', label: '移除容器', description: '移除容器' },
     ],
   },
   {
-    id: 'rollout_templates', label: '发布模板', description: '所有项目共用的发布模板', children: [
-      { id: 'rollout_templates.manage', label: '管理全局发布模板', description: '创建全局发布策略模板，需同时授予管理服务权限' },
+    id: 'batch', label: '批量操作', children: [
+      { id: 'services.batch', label: '使用批量操作入口', description: '同时勾选「容器与镜像」中的对应动作，例如重启实例' },
     ],
   },
   {
-    id: 'hosts', label: '主机管理', description: '主机信息与连接配置', children: [
+    id: 'rollouts', label: '滚动发布', children: [
+      { id: 'services.rollout_create', label: '创建滚动发布', description: '创建滚动发布' },
+      { id: 'services.rollout_pause', label: '暂停发布', description: '暂停发布' },
+      { id: 'services.rollout_resume', label: '继续发布', description: '继续发布' },
+      { id: 'services.rollout_retry', label: '重试失败项', description: '重试失败项' },
+    ],
+  },
+  {
+    id: 'auto_open', label: '自动开服', children: [
+      { id: 'services.auto_create', label: '创建开服策略', description: '创建开服策略' },
+      { id: 'services.auto_edit', label: '编辑开服策略', description: '编辑开服策略' },
+      { id: 'services.auto_enable', label: '启用开服策略', description: '启用开服策略' },
+      { id: 'services.auto_disable', label: '停用开服策略', description: '停用开服策略' },
+    ],
+  },
+  {
+    id: 'hosts', label: '项目主机', children: [
       { id: 'hosts.view', label: '查看主机', description: '查看授权项目关联的主机信息' },
-      { id: 'hosts.manage', label: '管理主机', description: '配置、删除主机并测试连接' },
+      { id: 'hosts.create', label: '添加主机', description: '添加主机' },
+      { id: 'hosts.edit', label: '编辑主机配置', description: '编辑主机配置' },
+      { id: 'hosts.test', label: '测试连接', description: '测试连接' },
+      { id: 'hosts.delete', label: '删除主机', description: '删除主机' },
+    ],
+  },
+  {
+    id: 'service_types', label: '全局服务类型', children: [
+      { id: 'service_types.view', label: '查看全局服务类型', description: '查看服务类型和启动参数表单' },
+      { id: 'service_types.create', label: '创建类型', description: '创建类型' },
+      { id: 'service_types.edit', label: '编辑类型', description: '编辑类型' },
+      { id: 'service_types.delete', label: '删除类型', description: '删除类型' },
+    ],
+  },
+  {
+    id: 'rollout_templates', label: '全局发布模板', children: [
+      { id: 'rollout_templates.manage', label: '管理全局发布模板', description: '创建全局发布策略模板，需同时授予创建滚动发布权限' },
     ],
   },
 ]
+
+const permissionOptions = permissionTree.flatMap(group => group.children.map(item => ({ value: item.id as UserPermission, label: item.label })))
 
 function projectLabels(user: ManagedUser) {
   if (user.role === 'admin') return '全部项目'
@@ -81,7 +114,7 @@ function projectLabels(user: ManagedUser) {
 }
 function permissionLabels(user: ManagedUser) {
   if (user.role === 'admin') return ['全部权限']
-  return user.permissions.map((permission) => permissionOptions.find((option) => option.value === permission)?.label || permission)
+  return permissionTreeLabels(user).map((permission) => permissionOptions.find((option) => option.value === permission)?.label || permission)
 }
 const filteredUsers = computed(() => {
   const query = searchKeyword.value.trim().toLocaleLowerCase()
@@ -99,7 +132,10 @@ const filteredUsers = computed(() => {
 })
 function permissionTreeLabels(user: ManagedUser): UserPermission[] {
   if (user.role === 'admin') return permissionOptions.map((option) => option.value)
-  return user.permissions || []
+  return permissionOptions.filter(({ value }) => {
+    const module = value.split('.')[0]
+    return user.permissions.includes(value) || user.permissions.includes((module + '.manage') as UserPermission)
+  }).map(option => option.value)
 }
 function openPermissionDetails(user: ManagedUser) {
   activePermissionUser.value = user
@@ -118,7 +154,7 @@ function openCreate() { resetForm(); permissionEditing.value = false; dialogVisi
 function openEdit(user: ManagedUser) {
   resetForm()
   editingUserId.value = user.id
-  Object.assign(form, { username: user.username, role: user.role, project_ids: [...(user.project_ids || [])], permissions: [...(user.permissions || [])], disabled: user.disabled })
+  Object.assign(form, { username: user.username, role: user.role, project_ids: [...(user.project_ids || [])], permissions: permissionTreeLabels(user), disabled: user.disabled })
   activePermissionUser.value = user
   permissionEditing.value = true
   detailVisible.value = true
@@ -139,8 +175,8 @@ async function saveUser() {
   if (!form.username.trim()) { ElMessage.warning('请输入用户名'); return }
   if (!editingUserId.value && form.password.length < 8) { ElMessage.warning('初始密码至少需要 8 位'); return }
   if (form.role === 'user' && !form.permissions.length) { ElMessage.warning('请至少授予一项功能权限'); return }
-  if (form.role === 'user' && form.permissions.includes('rollout_templates.manage') && !form.permissions.includes('services.manage')) {
-    ElMessage.warning('管理全局发布模板需要同时授予管理服务权限')
+  if (form.role === 'user' && form.permissions.includes('rollout_templates.manage') && !form.permissions.includes('services.rollout_create')) {
+    ElMessage.warning('管理全局发布模板需要同时授予创建滚动发布权限')
     return
   }
   if (form.role === 'user' && projectScopeRequired.value && !form.project_ids.length) { ElMessage.warning('请至少分配一个项目'); return }
@@ -189,7 +225,7 @@ onMounted(loadAll)
         <el-table class="access-table" :data="filteredUsers" row-key="id" :empty-text="searchKeyword ? '没有匹配的用户' : '暂无用户'">
           <el-table-column label="用户" min-width="150"><template #default="{ row }"><div class="user-cell"><span class="user-avatar">{{ row.username.slice(0, 1).toUpperCase() }}</span><span><b>{{ row.username }}</b><small>{{ row.role === 'admin' ? '平台管理员' : '普通用户' }}</small></span></div></template></el-table-column>
           <el-table-column label="项目范围" min-width="190"><template #default="{ row }"><span class="scope-text">{{ projectLabels(row) }}</span></template></el-table-column>
-          <el-table-column label="功能权限" min-width="190"><template #default="{ row }"><button class="permission-summary" @click="openPermissionDetails(row)"><span class="permission-summary-icon"><el-icon><Key /></el-icon></span><span><b>{{ row.role === 'admin' ? '全部权限' : `${row.permissions.length} 项权限` }}</b><small>{{ row.role === 'admin' ? '项目 · 服务 · 主机' : permissionLabels(row).slice(0, 2).join('、') || '未配置' }}</small></span></button></template></el-table-column>
+          <el-table-column label="功能权限" min-width="190"><template #default="{ row }"><button class="permission-summary" @click="openPermissionDetails(row)"><span class="permission-summary-icon"><el-icon><Key /></el-icon></span><span><b>{{ row.role === 'admin' ? '全部权限' : `${permissionTreeLabels(row).length} 项权限` }}</b><small>{{ row.role === 'admin' ? '项目 · 服务 · 主机' : permissionLabels(row).slice(0, 2).join('、') || '未配置' }}</small></span></button></template></el-table-column>
           <el-table-column label="状态" width="95"><template #default="{ row }"><el-tag :type="row.disabled ? 'info' : 'success'" size="small" effect="light">{{ row.disabled ? '已停用' : '正常' }}</el-tag></template></el-table-column>
           <el-table-column label="操作" width="100" fixed="right"><template #default="{ row }"><el-button link @click="openPassword(row)">重置密码</el-button></template></el-table-column>
         </el-table>
@@ -217,7 +253,7 @@ onMounted(loadAll)
           <div class="access-section-heading"><span class="section-index">01</span><span><b>项目访问范围</b><small>限制可访问的项目、服务实例和主机</small></span></div>
           <el-form-item label="可访问项目" :required="projectScopeRequired" class="project-scope-item"><div class="scope-field"><el-select v-model="form.project_ids" multiple filterable collapse-tags collapse-tags-tooltip placeholder="选择该用户可访问的项目" style="width: 100%"><el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" /></el-select><div class="form-hint"><el-icon><Key /></el-icon> 仅授予全局服务类型权限时，可不分配项目。</div></div></el-form-item>
           <div class="access-section-heading permission-section-heading"><span class="section-index">02</span><span><b>功能权限</b><small>按模块勾选可查看或管理的功能</small></span></div>
-          <el-form-item label="功能权限" class="permission-tree-item"><div class="permission-tree-panel"><div class="tree-panel-heading"><div><b>授权权限树</b><span>新增用户默认未授权，展开模块后选择具体权限。</span></div><span class="selected-count">已选 {{ form.permissions.length }} 项</span></div><el-tree ref="permissionTreeRef" :key="`${editingUserId || 'new'}-${dialogVisible}`" :data="permissionTree" node-key="id" :props="permissionTreeProps" :default-checked-keys="form.permissions" :check-strictly="false" :default-expand-all="false" :expand-on-click-node="false" show-checkbox class="permission-tree" @check="onPermissionCheck"><template #default="{ data }"><span class="permission-tree-label" :class="{ 'is-module': data.children }" :title="data.description"><span class="tree-node-icon"><el-icon><FolderOpened v-if="data.children" /><Key v-else /></el-icon></span><span class="tree-node-copy"><b>{{ data.label }}</b></span><el-tag v-if="data.id.endsWith('.manage')" size="small" type="warning" effect="light">管理</el-tag><el-tag v-else-if="!data.children" size="small" type="info" effect="plain">查看</el-tag></span></template></el-tree></div></el-form-item>
+          <el-form-item label="功能权限" class="permission-tree-item"><div class="permission-tree-panel"><div class="tree-panel-heading"><div><b>功能权限</b><span>展开分组可单选操作，勾选分组可授予整组权限。</span></div><span class="selected-count">已选 {{ form.permissions.length }} 项</span></div><el-tree ref="permissionTreeRef" :key="`${editingUserId || 'new'}-${dialogVisible}`" :data="permissionTree" node-key="id" :props="permissionTreeProps" :default-checked-keys="form.permissions" :check-strictly="false" :default-expand-all="false" :expand-on-click-node="false" show-checkbox class="permission-tree" @check="onPermissionCheck"><template #default="{ data }"><span class="permission-tree-label" :class="{ 'is-module': data.children }" :title="data.description"><span class="tree-node-icon"><el-icon><FolderOpened v-if="data.children" /><Key v-else /></el-icon></span><span class="tree-node-copy"><b>{{ data.label }}</b></span><el-tag v-if="data.id.endsWith('.manage')" size="small" type="warning" effect="light">管理</el-tag><el-tag v-else-if="!data.children" size="small" type="info" effect="plain">{{ data.id.endsWith('.view') ? '查看' : '操作' }}</el-tag></span></template></el-tree></div></el-form-item>
         </template>
         <div v-else class="admin-notice"><span class="admin-notice-icon"><el-icon><Key /></el-icon></span><span><b>平台管理员</b><small>拥有全部项目范围及项目、服务、主机的全部权限。</small></span><el-tag type="success" effect="light">全部授权</el-tag></div>
       </el-form>
@@ -244,7 +280,7 @@ onMounted(loadAll)
             <div class="detail-section-title permission-detail-section">项目范围</div>
             <el-form-item label="可访问项目" :required="projectScopeRequired"><el-select v-model="form.project_ids" multiple filterable collapse-tags collapse-tags-tooltip placeholder="选择该用户可访问的项目" style="width: 100%"><el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" /></el-select></el-form-item>
             <div class="detail-section-title permission-detail-section">功能权限</div>
-            <div class="permission-tree-panel drawer-permission-tree"><div class="tree-panel-heading"><div><b>授权权限树</b><span>按需勾选模块权限</span></div><span class="selected-count">已选 {{ form.permissions.length }} 项</span></div><el-tree ref="permissionTreeRef" :key="`${editingUserId}-${permissionEditing}`" :data="permissionTree" node-key="id" :props="permissionTreeProps" :default-checked-keys="form.permissions" :check-strictly="false" :default-expand-all="false" :expand-on-click-node="false" show-checkbox class="permission-tree" @check="onPermissionCheck"><template #default="{ data }"><span class="permission-tree-label" :class="{ 'is-module': data.children }" :title="data.description"><span class="tree-node-icon"><el-icon><FolderOpened v-if="data.children" /><Key v-else /></el-icon></span><span class="tree-node-copy"><b>{{ data.label }}</b></span><el-tag v-if="data.id.endsWith('.manage')" size="small" type="warning" effect="light">管理</el-tag><el-tag v-else-if="!data.children" size="small" type="info" effect="plain">查看</el-tag></span></template></el-tree></div>
+            <div class="permission-tree-panel drawer-permission-tree"><div class="tree-panel-heading"><div><b>功能权限</b><span>展开分组可单选操作，勾选分组可授予整组权限。</span></div><span class="selected-count">已选 {{ form.permissions.length }} 项</span></div><el-tree ref="permissionTreeRef" :key="`${editingUserId}-${permissionEditing}`" :data="permissionTree" node-key="id" :props="permissionTreeProps" :default-checked-keys="form.permissions" :check-strictly="false" :default-expand-all="false" :expand-on-click-node="false" show-checkbox class="permission-tree" @check="onPermissionCheck"><template #default="{ data }"><span class="permission-tree-label" :class="{ 'is-module': data.children }" :title="data.description"><span class="tree-node-icon"><el-icon><FolderOpened v-if="data.children" /><Key v-else /></el-icon></span><span class="tree-node-copy"><b>{{ data.label }}</b></span><el-tag v-if="data.id.endsWith('.manage')" size="small" type="warning" effect="light">管理</el-tag><el-tag v-else-if="!data.children" size="small" type="info" effect="plain">{{ data.id.endsWith('.view') ? '查看' : '操作' }}</el-tag></span></template></el-tree></div>
           </template>
           <div v-else class="admin-notice drawer-admin-notice"><span class="admin-notice-icon"><el-icon><Key /></el-icon></span><span><b>平台管理员</b><small>拥有全部项目范围及功能权限。</small></span><el-tag type="success" effect="light">全部授权</el-tag></div>
         </el-form>
@@ -254,7 +290,7 @@ onMounted(loadAll)
           <div class="detail-section-title permission-detail-section">功能权限</div>
           <div class="permission-detail-card permission-detail-tree-card"><el-tree :data="permissionTree" node-key="id" :props="permissionTreeProps" :default-checked-keys="permissionTreeLabels(activePermissionUser)" :check-strictly="false" :default-expand-all="true" :expand-on-click-node="false" show-checkbox class="readonly-permission-tree"><template #default="{ data }"><span class="readonly-tree-label" :class="{ 'tree-group-label': data.children }"><span>{{ data.label }}</span></span></template></el-tree></div>
           <div class="detail-section-title permission-detail-section">账号信息</div>
-          <div class="permission-detail-kv"><div><span>创建时间</span><b>{{ activePermissionUser.created_at || '—' }}</b></div><div><span>授权项目</span><b>{{ activePermissionUser.role === 'admin' ? '全部项目' : `${activePermissionUser.project_ids.length} 个` }}</b></div><div><span>功能权限</span><b>{{ activePermissionUser.role === 'admin' ? '全部权限' : `${activePermissionUser.permissions.length} 项` }}</b></div></div>
+          <div class="permission-detail-kv"><div><span>创建时间</span><b>{{ activePermissionUser.created_at || '—' }}</b></div><div><span>授权项目</span><b>{{ activePermissionUser.role === 'admin' ? '全部项目' : `${activePermissionUser.project_ids.length} 个` }}</b></div><div><span>功能权限</span><b>{{ activePermissionUser.role === 'admin' ? '全部权限' : `${permissionTreeLabels(activePermissionUser).length} 项` }}</b></div></div>
         </div>
         <div class="permission-detail-footer"><template v-if="permissionEditing"><el-button @click="permissionEditing = false; editingUserId = ''">取消</el-button><el-button type="primary" :loading="saving" @click="saveUser">保存</el-button></template><el-button v-else type="primary" :icon="Key" @click="openEdit(activePermissionUser!)">编辑权限</el-button></div>
       </div>

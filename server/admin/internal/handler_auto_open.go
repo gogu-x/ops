@@ -14,10 +14,10 @@ func (a *AdminService) registerAutoOpenRoutes(r *gin.RouterGroup) {
 		return
 	}
 	r.GET("/auto-open-policies", requirePermission(model.PermissionServicesView), a.listAutoOpenPolicies)
-	r.GET("/auto-open-templates", requirePermission(model.PermissionServicesManage), a.listAutoOpenTemplates)
-	r.POST("/auto-open-policies", requirePermission(model.PermissionServicesManage), a.saveAutoOpenPolicy)
-	r.PUT("/auto-open-policies/:id", requirePermission(model.PermissionServicesManage), a.saveAutoOpenPolicy)
-	r.PUT("/auto-open-policies/:id/enabled", requirePermission(model.PermissionServicesManage), a.setAutoOpenEnabled)
+	r.GET("/auto-open-templates", requireAnyPermission(model.PermissionServicesAutoCreate, model.PermissionServicesAutoEdit), a.listAutoOpenTemplates)
+	r.POST("/auto-open-policies", requirePermission(model.PermissionServicesAutoCreate), a.saveAutoOpenPolicy)
+	r.PUT("/auto-open-policies/:id", requirePermission(model.PermissionServicesAutoEdit), a.saveAutoOpenPolicy)
+	r.PUT("/auto-open-policies/:id/enabled", requireAnyPermission(model.PermissionServicesAutoEnable, model.PermissionServicesAutoDisable), a.setAutoOpenEnabled)
 }
 
 func (a *AdminService) listAutoOpenPolicies(c *gin.Context) {

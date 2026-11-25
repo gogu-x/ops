@@ -52,8 +52,8 @@ const releaseDialogVisible = ref(false)
 const releaseForm = reactive<ReleaseStrategy>({ name: '', maxUnavailable: 1, maxParallel: 5, maxParallelPerGroup: 2 })
 
 const auth = useAuthStore()
-const canManage = computed(() => auth.hasPermission('services.manage'))
-const canManageTemplates = computed(() => canManage.value && auth.hasPermission('rollout_templates.manage'))
+const canManage = computed(() => auth.hasPermission('services.rollout_create'))
+const canManageTemplates = computed(() => auth.hasPermission('rollout_templates.manage') && canManage.value)
 const loading = ref(false)
 const loadError = ref('')
 const projects = ref<Project[]>([])
@@ -91,7 +91,7 @@ const hostsByID = computed(() => {
   return result
 })
 const projectEnvironments = computed(() => environments.value.filter((item) => item.project_id === selectedProjectID.value))
-const rolloutParameterFields = computed(() => typesByID.value.get(selectedTypeID.value)?.parameter_fields || [])
+const rolloutParameterFields = computed(() => typesByID.value.get(selectedTypeID.value)?.parameter_fields?.filter(field => field.kind !== 'fixed') || [])
 const rolloutParameterValues = ref<Record<string, string>>({})
 const selectedSet = computed(() => new Set(selectedIDs.value))
 const selectedInstances = computed(() => instances.value.filter((item) => selectedSet.value.has(item.id)))
@@ -469,7 +469,7 @@ onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
                     <div class="target-instance-main"><b>{{ item.name }}</b><small>{{ typesByID.get(item.service_type_id)?.name || '未知服务类型' }} · {{ hostsByID.get(item.host_id)?.name || item.host_id }}</small></div>
                     <code>{{ item.image }}</code>
                     <el-tag size="small" :type="item.status === 'running' ? 'success' : item.status === 'error' ? 'danger' : 'info'">{{ statusLabel(item.status) }}</el-tag>
-                    <el-button v-if="canManage" text size="small" @click="editInstanceGroup(item)">{{ item.rollout_group || '设置服组' }}</el-button>
+                    <el-button v-if="auth.hasPermission('services.edit')" text size="small" @click="editInstanceGroup(item)">{{ item.rollout_group || '设置服组' }}</el-button>
                   </div>
                 </article>
                 <el-empty v-if="!targetGroups.length" :description="!selectedProjectID ? '请选择项目' : !selectedTypeID ? '请先选择服务类型' : '当前筛选条件下没有服务实例'" :image-size="66" />
@@ -534,9 +534,9 @@ onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
             <header class="rollout-card-header">
               <div><h2>{{ rolloutDetail.job.action === 'restart' ? '滚动重启' : '滚动更新镜像' }} · {{ taskStatusLabel(rolloutDetail.job.status) }}</h2><p>{{ rolloutDetail.job.operator }} · {{ new Date(rolloutDetail.job.created_at).toLocaleString() }}</p></div>
               <div class="task-controls">
-                <el-button v-if="['queued', 'running'].includes(rolloutDetail.job.status) && canManage" size="small" @click="controlTask('pause')">暂停</el-button>
-                <el-button v-if="rolloutDetail.job.status === 'paused' && canManage" size="small" type="primary" @click="controlTask('resume')">续跑</el-button>
-                <el-button v-if="rolloutDetail.job.failed > 0 && ['paused', 'partial', 'failed'].includes(rolloutDetail.job.status) && canManage" size="small" type="warning" @click="controlTask('retry')">只重试失败项</el-button>
+                <el-button v-if="['queued', 'running'].includes(rolloutDetail.job.status) && auth.hasPermission('services.rollout_pause')" size="small" @click="controlTask('pause')">暂停</el-button>
+                <el-button v-if="rolloutDetail.job.status === 'paused' && auth.hasPermission('services.rollout_resume')" size="small" type="primary" @click="controlTask('resume')">续跑</el-button>
+                <el-button v-if="rolloutDetail.job.failed > 0 && ['paused', 'partial', 'failed'].includes(rolloutDetail.job.status) && auth.hasPermission('services.rollout_retry')" size="small" type="warning" @click="controlTask('retry')">只重试失败项</el-button>
               </div>
             </header>
             <div class="task-progress-row"><el-progress :percentage="taskProgress(rolloutDetail)" :status="rolloutDetail.job.status === 'failed' ? 'exception' : rolloutDetail.job.status === 'succeeded' ? 'success' : undefined" /><span>{{ rolloutDetail.job.completed }}/{{ rolloutDetail.job.total }} · 成功 {{ rolloutDetail.job.succeeded }} · 失败 {{ rolloutDetail.job.failed }}</span></div>
@@ -641,6 +641,11 @@ onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
 .task-audit time { font-variant-numeric: tabular-nums; }
 .strategy-picker { display: flex; gap: 10px; margin-bottom: 8px; }
 .strategy-picker .el-select { flex: 1; min-width: 0; max-width: 360px; }
+@media (max-width: 760px) {
+  /* Keep page and table loading masks below the mobile navigation. */
+  .rollouts-page > :deep(.el-loading-mask),
+  .rollout-table > :deep(.el-loading-mask) { z-index: 10; }
+}
 @media (max-width: 700px) {
   .rollout-filter-bar > * { width: 100% !important; max-width: none !important; }
   .target-instance-row { grid-template-columns: 18px minmax(100px, 1fr) auto; }

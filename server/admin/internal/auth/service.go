@@ -144,12 +144,12 @@ func normalizeAccess(user *model.User) error {
 		if len(user.Permissions) == 0 {
 			return errors.New("普通用户至少需要一项功能权限")
 		}
-		if seenPermissions[model.PermissionRolloutTemplatesManage] && !seenPermissions[model.PermissionServicesManage] {
-			return errors.New("管理全局发布模板需要同时授予管理服务权限")
+		if seenPermissions[model.PermissionRolloutTemplatesManage] && !user.HasPermission(model.PermissionServicesRolloutCreate) {
+			return errors.New("管理全局发布模板需要同时授予创建滚动发布权限")
 		}
 		if len(user.ProjectIDs) == 0 {
 			for _, permission := range user.Permissions {
-				if permission != model.PermissionServiceTypesView && permission != model.PermissionServiceTypesManage {
+				if !strings.HasPrefix(permission, "service_types.") {
 					return errors.New("该用户的功能权限需要至少分配一个项目")
 				}
 			}

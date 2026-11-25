@@ -3,7 +3,6 @@ package internal
 import (
 	"context"
 	"errors"
-	"strings"
 	"sync"
 	"time"
 
@@ -242,11 +241,10 @@ func (m *serviceOperationManager) pruneLocked(now time.Time) {
 	}
 }
 
-func supportedBatchAction(action string) bool {
-	switch strings.TrimSpace(action) {
-	case "deploy", "start", "stop", "restart", "update_image":
-		return true
-	default:
-		return false
-	}
+var batchActionPermissions = map[string]string{
+	"deploy":       model.PermissionServicesDeploy,
+	"start":        model.PermissionServicesStart,
+	"stop":         model.PermissionServicesStop,
+	"restart":      model.PermissionServicesRestart,
+	"update_image": model.PermissionServicesUpdateImage,
 }

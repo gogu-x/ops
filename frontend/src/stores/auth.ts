@@ -23,12 +23,10 @@ export function hasUserPermission(user: { role?: string; permissions?: string[] 
   if (user?.role === 'admin') return true
   const permissions = user?.permissions || []
   if (permissions.includes(permission)) return true
-  switch (permission) {
-    case 'services.view': return permissions.includes('services.manage')
-    case 'service_types.view': return permissions.includes('service_types.manage')
-    case 'hosts.view': return permissions.includes('hosts.manage')
-    default: return false
-  }
+  const module = permission.split('.')[0]
+  if (!['services', 'hosts', 'service_types'].includes(module)) return false
+  return permissions.includes(module + '.manage') ||
+    (permission === module + '.view' && permissions.some(item => item.startsWith(module + '.')))
 }
 
 export const useAuthStore = defineStore('auth', () => {

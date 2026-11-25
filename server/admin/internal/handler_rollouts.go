@@ -14,12 +14,12 @@ import (
 )
 
 func (a *AdminService) registerRolloutRoutes(r *gin.RouterGroup) {
-	r.POST("/rollouts", requirePermission(model.PermissionServicesManage), a.createRollout)
+	r.POST("/rollouts", requirePermission(model.PermissionServicesRolloutCreate), a.createRollout)
 	r.GET("/rollouts", requirePermission(model.PermissionServicesView), a.listRollouts)
 	r.GET("/rollouts/:id", requirePermission(model.PermissionServicesView), a.getRollout)
-	r.POST("/rollouts/:id/pause", requirePermission(model.PermissionServicesManage), a.pauseRollout)
-	r.POST("/rollouts/:id/resume", requirePermission(model.PermissionServicesManage), a.resumeRollout)
-	r.POST("/rollouts/:id/retry-failed", requirePermission(model.PermissionServicesManage), a.retryFailedRollout)
+	r.POST("/rollouts/:id/pause", requirePermission(model.PermissionServicesRolloutPause), a.pauseRollout)
+	r.POST("/rollouts/:id/resume", requirePermission(model.PermissionServicesRolloutResume), a.resumeRollout)
+	r.POST("/rollouts/:id/retry-failed", requirePermission(model.PermissionServicesRolloutRetry), a.retryFailedRollout)
 }
 
 func (a *AdminService) createRollout(c *gin.Context) {

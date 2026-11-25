@@ -45,6 +45,10 @@ func validateParameterFields(fields []model.ServiceParameterField) error {
 		}
 		seen[key] = struct{}{}
 		switch field.Kind {
+		case "fixed":
+			if strings.TrimSpace(field.DefaultValue) == "" {
+				return fmt.Errorf("%s 的固定预设值不能为空", field.Flag)
+			}
 		case "text":
 		case "integer":
 			if field.DefaultValue != "" {

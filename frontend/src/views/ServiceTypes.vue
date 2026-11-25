@@ -8,7 +8,7 @@ import { useAuthStore } from '../stores/auth'
 import { serviceApi, type ServiceParameterField, type ServiceType, type ServiceTypeForm } from '../api/services'
 
 const auth = useAuthStore()
-const canManage = computed(() => auth.hasPermission('service_types.manage'))
+const canManage = computed(() => auth.hasPermission(editingTypeId.value ? 'service_types.edit' : 'service_types.create'))
 const types = ref<ServiceType[]>([])
 const keyword = ref('')
 const loading = ref(false)
@@ -102,8 +102,8 @@ async function saveType() {
         label: field.label.trim(),
         flag: field.flag.trim(),
         kind: field.kind,
-        required: field.required,
-        default_value: field.kind === 'text' ? field.default_value : field.default_value.trim(),
+        required: field.kind !== 'fixed' && field.required,
+        default_value: field.kind === 'text' || field.kind === 'fixed' ? field.default_value : field.default_value.trim(),
         ...(field.kind === 'select' ? { options: field.optionsText.split('\n').map(option => option.trim()).filter(Boolean) } : {}),
       })),
     }
@@ -147,7 +147,7 @@ onMounted(loadAll)
           <div class="ops-list-toolbar-actions">
             <el-input v-model="keyword" class="types-search" :prefix-icon="Search" clearable placeholder="搜索类型名称" aria-label="搜索类型名称" />
             <el-button :icon="Refresh" :loading="loading" @click="loadAll">刷新</el-button>
-            <el-button v-if="canManage" :icon="Plus" type="primary" @click="openCreateType">新建服务类型</el-button>
+            <el-button v-if="auth.hasPermission('service_types.create')" :icon="Plus" type="primary" @click="openCreateType">新建服务类型</el-button>
           </div>
         </header>
         <div class="type-row type-columns" aria-hidden="true"><span>类型名称</span><span>启动参数</span><span>操作</span></div>
@@ -163,7 +163,7 @@ onMounted(loadAll)
             </div>
             <div class="type-actions">
               <el-button link type="primary" @click="openType(type)">详情</el-button>
-              <el-button v-if="canManage" link type="danger" @click="removeType(type)">删除</el-button>
+              <el-button v-if="auth.hasPermission('service_types.delete')" link type="danger" @click="removeType(type)">删除</el-button>
             </div>
           </li>
         </ul>
@@ -213,20 +213,21 @@ onMounted(loadAll)
               </el-form-item>
               <el-form-item label="输入类型">
                 <el-select v-model="field.kind">
+                  <el-option label="固定预设值" value="fixed" />
                   <el-option label="文本" value="text" />
                   <el-option label="整数" value="integer" />
                   <el-option label="下拉选择" value="select" />
                 </el-select>
               </el-form-item>
-              <el-form-item label="默认值">
-                <el-input v-model="field.default_value" placeholder="可留空" />
+              <el-form-item :label="field.kind === 'fixed' ? '固定预设值' : '默认值'" :required="field.kind === 'fixed'">
+                <el-input v-model="field.default_value" :placeholder="field.kind === 'fixed' ? '所有实例部署时使用此值' : '可留空'" />
               </el-form-item>
             </div>
             <el-form-item v-if="field.kind === 'select'" label="可选值" required>
               <el-input v-model="field.optionsText" type="textarea" :rows="3" placeholder="每行填写一个可选值" />
             </el-form-item>
             <div class="parameter-field-actions">
-              <el-checkbox v-model="field.required">必填</el-checkbox>
+              <el-checkbox v-if="field.kind !== 'fixed'" v-model="field.required">必填</el-checkbox>
               <el-button v-if="canManage" link type="danger" :icon="Delete" @click="removeParameterField(index)">移除</el-button>
             </div>
           </el-form>

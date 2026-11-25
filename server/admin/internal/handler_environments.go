@@ -11,9 +11,9 @@ import (
 
 func (a *AdminService) registerEnvironmentRoutes(r *gin.RouterGroup) {
 	r.GET("/environments", requireAnyPermission(model.PermissionServicesView, model.PermissionProjectsView), a.listEnvironments)
-	r.POST("/environments", requirePermission(model.PermissionServicesManage), a.createEnvironment)
-	r.PUT("/environments/:id", requirePermission(model.PermissionServicesManage), a.updateEnvironment)
-	r.DELETE("/environments/:id", requirePermission(model.PermissionServicesManage), a.deleteEnvironment)
+	r.POST("/environments", requirePermission(model.PermissionServicesEnvironmentCreate), a.createEnvironment)
+	r.PUT("/environments/:id", requirePermission(model.PermissionServicesEnvironmentEdit), a.updateEnvironment)
+	r.DELETE("/environments/:id", requirePermission(model.PermissionServicesEnvironmentDelete), a.deleteEnvironment)
 }
 
 func (a *AdminService) listEnvironments(c *gin.Context) {

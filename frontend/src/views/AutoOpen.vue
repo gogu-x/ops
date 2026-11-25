@@ -10,7 +10,7 @@ import { projectApi, type Project } from '../api/projects'
 import { useAuthStore } from '../stores/auth'
 
 const auth = useAuthStore()
-const canManage = computed(() => auth.hasPermission('services.manage'))
+const canManage = computed(() => auth.hasPermission('services.auto_create'))
 const policies = ref<AutoOpenPolicy[]>([])
 const templates = ref<AutoOpenTemplate[]>([])
 const projects = ref<Project[]>([])
@@ -251,8 +251,8 @@ onUnmounted(() => { if (polling) clearInterval(polling) })
                   </div>
                 </td>
                 <td class="policy-actions">
-                  <el-button v-if="canManage && !row.enabled && !row.running && !row.recent_runs.length" link @click="showEditor(row)">编辑</el-button>
-                  <el-button v-if="canManage && row.completed < row.count" type="primary" link :disabled="row.running" :loading="changingId === row.id" @click="changeEnabled(row)">
+                  <el-button v-if="auth.hasPermission('services.auto_edit') && !row.enabled && !row.running && !row.recent_runs.length" link @click="showEditor(row)">编辑</el-button>
+                  <el-button v-if="auth.hasPermission(row.enabled ? 'services.auto_disable' : 'services.auto_enable') && row.completed < row.count" type="primary" link :disabled="row.running" :loading="changingId === row.id" @click="changeEnabled(row)">
                     {{ row.enabled ? '停用' : row.recent_runs[0]?.error ? '重试' : '启用' }}
                   </el-button>
                   <el-button link @click="recordsId = row.id">记录</el-button>

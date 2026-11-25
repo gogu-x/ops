@@ -28,7 +28,7 @@ func (a *AdminService) listProjects(c *gin.Context) {
 		visible := items[:0]
 		for _, item := range items {
 			if user.HasProject(item.ID) {
-				if !user.HasPermission(model.PermissionProjectsView) && !user.HasPermission(model.PermissionServicesManage) {
+				if !user.HasPermission(model.PermissionProjectsView) && !user.HasPermission(model.PermissionServicesCreate) {
 					item.EnvVars = ""
 				}
 				visible = append(visible, item)

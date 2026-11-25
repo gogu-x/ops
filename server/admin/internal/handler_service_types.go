@@ -11,9 +11,9 @@ import (
 
 func (a *AdminService) registerServiceTypeRoutes(r *gin.RouterGroup) {
 	r.GET("/service-types", requireAnyPermission(model.PermissionServiceTypesView, model.PermissionServicesView, model.PermissionProjectsView), a.listServiceTypes)
-	r.POST("/service-types", requirePermission(model.PermissionServiceTypesManage), a.createServiceType)
-	r.PUT("/service-types/:id", requirePermission(model.PermissionServiceTypesManage), a.updateServiceType)
-	r.DELETE("/service-types/:id", requirePermission(model.PermissionServiceTypesManage), a.deleteServiceType)
+	r.POST("/service-types", requirePermission(model.PermissionServiceTypesCreate), a.createServiceType)
+	r.PUT("/service-types/:id", requirePermission(model.PermissionServiceTypesEdit), a.updateServiceType)
+	r.DELETE("/service-types/:id", requirePermission(model.PermissionServiceTypesDelete), a.deleteServiceType)
 }
 
 func (a *AdminService) listServiceTypes(c *gin.Context) {

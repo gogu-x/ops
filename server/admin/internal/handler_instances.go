@@ -16,24 +16,24 @@ import (
 
 func (a *AdminService) registerInstanceRoutes(r *gin.RouterGroup) {
 	r.GET("/service-instances", requireAnyPermission(model.PermissionServicesView, model.PermissionProjectsView), a.listServiceInstances)
-	r.POST("/service-instances", requirePermission(model.PermissionServicesManage), a.createServiceInstance)
-	r.PUT("/service-instances/:id", requirePermission(model.PermissionServicesManage), a.updateServiceInstance)
-	r.DELETE("/service-instances/:id", requirePermission(model.PermissionServicesManage), a.deleteServiceInstance)
+	r.POST("/service-instances", requirePermission(model.PermissionServicesCreate), a.createServiceInstance)
+	r.PUT("/service-instances/:id", requirePermission(model.PermissionServicesEdit), a.updateServiceInstance)
+	r.DELETE("/service-instances/:id", requirePermission(model.PermissionServicesDelete), a.deleteServiceInstance)
 	r.GET("/service-instances/:id/status", requirePermission(model.PermissionServicesView), a.serviceInstanceStatus)
 	r.GET("/service-instances/:id/detail", requirePermission(model.PermissionServicesView), a.serviceInstanceDetail)
 	r.GET("/service-instances/:id/resources", requirePermission(model.PermissionServicesView), a.serviceInstanceResourceHistory)
 	r.GET("/service-instances/:id/logs", requirePermission(model.PermissionServicesView), a.serviceInstanceLogs)
 	r.GET("/service-instances/:id/events", requirePermission(model.PermissionServicesView), a.serviceInstanceEvents)
 	r.GET("/service-instances/:id/deployments", requirePermission(model.PermissionServicesView), a.serviceInstanceDeployments)
-	r.POST("/service-instances/:id/deployments/:deployment_id/rollback", requirePermission(model.PermissionServicesManage), a.rollbackServiceInstanceDeployment)
-	r.POST("/service-instances/:id/deploy", requirePermission(model.PermissionServicesManage), a.deployServiceInstance)
-	r.POST("/service-instances/:id/update-image", requirePermission(model.PermissionServicesManage), a.updateServiceInstanceImage)
-	r.POST("/service-instances/:id/start", requirePermission(model.PermissionServicesManage), a.startServiceInstance)
-	r.POST("/service-instances/:id/stop", requirePermission(model.PermissionServicesManage), a.stopServiceInstance)
-	r.POST("/service-instances/:id/restart", requirePermission(model.PermissionServicesManage), a.restartServiceInstance)
-	r.DELETE("/service-instances/:id/container", requirePermission(model.PermissionServicesManage), a.removeServiceInstanceContainer)
-	r.POST("/service-instances/batch-operations", requirePermission(model.PermissionServicesManage), a.startServiceInstanceBatchOperation)
-	r.GET("/service-instance-operations/:id", requirePermission(model.PermissionServicesManage), a.getServiceInstanceOperation)
+	r.POST("/service-instances/:id/deployments/:deployment_id/rollback", requirePermission(model.PermissionServicesRollback), a.rollbackServiceInstanceDeployment)
+	r.POST("/service-instances/:id/deploy", requirePermission(model.PermissionServicesDeploy), a.deployServiceInstance)
+	r.POST("/service-instances/:id/update-image", requirePermission(model.PermissionServicesUpdateImage), a.updateServiceInstanceImage)
+	r.POST("/service-instances/:id/start", requirePermission(model.PermissionServicesStart), a.startServiceInstance)
+	r.POST("/service-instances/:id/stop", requirePermission(model.PermissionServicesStop), a.stopServiceInstance)
+	r.POST("/service-instances/:id/restart", requirePermission(model.PermissionServicesRestart), a.restartServiceInstance)
+	r.DELETE("/service-instances/:id/container", requirePermission(model.PermissionServicesRemoveContainer), a.removeServiceInstanceContainer)
+	r.POST("/service-instances/batch-operations", requirePermission(model.PermissionServicesBatch), a.startServiceInstanceBatchOperation)
+	r.GET("/service-instance-operations/:id", requirePermission(model.PermissionServicesBatch), a.getServiceInstanceOperation)
 }
 
 func (a *AdminService) listServiceInstances(c *gin.Context) {
@@ -357,8 +357,13 @@ func (a *AdminService) startServiceInstanceBatchOperation(c *gin.Context) {
 	}
 	request.Action = strings.TrimSpace(request.Action)
 	request.Image = strings.TrimSpace(request.Image)
-	if !supportedBatchAction(request.Action) {
+	permission, supported := batchActionPermissions[request.Action]
+	if !supported {
 		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "不支持的批量操作"})
+		return
+	}
+	if !currentUser(c).HasPermission(permission) {
+		c.JSON(http.StatusForbidden, gin.H{"ok": false, "error": "无权执行所选批量操作"})
 		return
 	}
 	if request.Action == "update_image" && request.Image == "" {

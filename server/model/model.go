@@ -20,15 +20,44 @@ const (
 	RoleAdmin = "admin"
 	RoleUser  = "user"
 
-	PermissionDashboardView          = "dashboard.view"
-	PermissionProjectsView           = "projects.view"
-	PermissionServicesView           = "services.view"
-	PermissionServicesManage         = "services.manage"
-	PermissionServiceTypesView       = "service_types.view"
-	PermissionServiceTypesManage     = "service_types.manage"
-	PermissionRolloutTemplatesManage = "rollout_templates.manage"
-	PermissionHostsView              = "hosts.view"
-	PermissionHostsManage            = "hosts.manage"
+	PermissionDashboardView             = "dashboard.view"
+	PermissionProjectsView              = "projects.view"
+	PermissionServicesView              = "services.view"
+	PermissionServicesManage            = "services.manage"
+	PermissionServiceTypesView          = "service_types.view"
+	PermissionServiceTypesManage        = "service_types.manage"
+	PermissionRolloutTemplatesManage    = "rollout_templates.manage"
+	PermissionHostsView                 = "hosts.view"
+	PermissionHostsManage               = "hosts.manage"
+	PermissionServicesCreate            = "services.create"
+	PermissionServicesEdit              = "services.edit"
+	PermissionServicesDelete            = "services.delete"
+	PermissionServicesDeploy            = "services.deploy"
+	PermissionServicesStart             = "services.start"
+	PermissionServicesStop              = "services.stop"
+	PermissionServicesRestart           = "services.restart"
+	PermissionServicesUpdateImage       = "services.update_image"
+	PermissionServicesRemoveContainer   = "services.remove_container"
+	PermissionServicesRollback          = "services.rollback"
+	PermissionServicesBatch             = "services.batch"
+	PermissionServicesEnvironmentCreate = "services.environment_create"
+	PermissionServicesEnvironmentEdit   = "services.environment_edit"
+	PermissionServicesEnvironmentDelete = "services.environment_delete"
+	PermissionServicesRolloutCreate     = "services.rollout_create"
+	PermissionServicesRolloutPause      = "services.rollout_pause"
+	PermissionServicesRolloutResume     = "services.rollout_resume"
+	PermissionServicesRolloutRetry      = "services.rollout_retry"
+	PermissionServicesAutoCreate        = "services.auto_create"
+	PermissionServicesAutoEdit          = "services.auto_edit"
+	PermissionServicesAutoEnable        = "services.auto_enable"
+	PermissionServicesAutoDisable       = "services.auto_disable"
+	PermissionHostsCreate               = "hosts.create"
+	PermissionHostsEdit                 = "hosts.edit"
+	PermissionHostsTest                 = "hosts.test"
+	PermissionHostsDelete               = "hosts.delete"
+	PermissionServiceTypesCreate        = "service_types.create"
+	PermissionServiceTypesEdit          = "service_types.edit"
+	PermissionServiceTypesDelete        = "service_types.delete"
 )
 
 var UserPermissions = []string{
@@ -41,6 +70,35 @@ var UserPermissions = []string{
 	PermissionRolloutTemplatesManage,
 	PermissionHostsView,
 	PermissionHostsManage,
+	PermissionServicesCreate,
+	PermissionServicesEdit,
+	PermissionServicesDelete,
+	PermissionServicesDeploy,
+	PermissionServicesStart,
+	PermissionServicesStop,
+	PermissionServicesRestart,
+	PermissionServicesUpdateImage,
+	PermissionServicesRemoveContainer,
+	PermissionServicesRollback,
+	PermissionServicesBatch,
+	PermissionServicesEnvironmentCreate,
+	PermissionServicesEnvironmentEdit,
+	PermissionServicesEnvironmentDelete,
+	PermissionServicesRolloutCreate,
+	PermissionServicesRolloutPause,
+	PermissionServicesRolloutResume,
+	PermissionServicesRolloutRetry,
+	PermissionServicesAutoCreate,
+	PermissionServicesAutoEdit,
+	PermissionServicesAutoEnable,
+	PermissionServicesAutoDisable,
+	PermissionHostsCreate,
+	PermissionHostsEdit,
+	PermissionHostsTest,
+	PermissionHostsDelete,
+	PermissionServiceTypesCreate,
+	PermissionServiceTypesEdit,
+	PermissionServiceTypesDelete,
 }
 
 func (u User) HasProject(projectID string) bool {
@@ -59,21 +117,18 @@ func (u User) HasPermission(permission string) bool {
 	if u.Role == RoleAdmin {
 		return true
 	}
+	module, _, _ := strings.Cut(permission, ".")
 	for _, item := range u.Permissions {
 		if item == permission {
 			return true
 		}
+		if (module == "services" || module == "hosts" || module == "service_types") && strings.HasPrefix(item, module+".") {
+			if permission == module+".view" || item == module+".manage" {
+				return true
+			}
+		}
 	}
-	switch permission {
-	case PermissionServicesView:
-		return u.HasPermission(PermissionServicesManage)
-	case PermissionServiceTypesView:
-		return u.HasPermission(PermissionServiceTypesManage)
-	case PermissionHostsView:
-		return u.HasPermission(PermissionHostsManage)
-	default:
-		return false
-	}
+	return false
 }
 
 type RefreshToken struct {

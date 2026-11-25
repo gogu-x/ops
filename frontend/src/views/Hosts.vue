@@ -47,7 +47,6 @@ watch(connectionSignature, () => {
   if (detailTestState.value !== 'testing') detailTestState.value = 'idle'
 })
 
-const canManage = () => auth.hasPermission('hosts.manage')
 
 async function loadHosts() {
   loading.value = true
@@ -230,7 +229,7 @@ onMounted(loadHosts)
     <section class="ops-list-panel">
       <header class="ops-list-toolbar">
         <h2>主机列表</h2>
-        <el-button v-if="canManage()" type="primary" :icon="Plus" @click="openCreate">添加主机</el-button>
+        <el-button v-if="auth.hasPermission('hosts.create')" type="primary" :icon="Plus" @click="openCreate">添加主机</el-button>
       </header>
       <div class="host-list">
         <div v-for="row in hosts" :key="row.id" class="host-item ops-list-row">
@@ -255,11 +254,11 @@ onMounted(loadHosts)
             <div v-if="row.note" class="host-item-note">{{ row.note }}</div>
           </div>
           <div class="host-item-actions">
-            <el-button v-if="canManage()" link type="primary" :icon="Connection" :loading="testStates[row.id] === 'testing'" @click="testHost(row)">
+            <el-button v-if="auth.hasPermission('hosts.test')" link type="primary" :icon="Connection" :loading="testStates[row.id] === 'testing'" @click="testHost(row)">
               测试连接
             </el-button>
             <el-button link :icon="View" @click="openDetails(row)">详情</el-button>
-            <el-button v-if="canManage()" link type="danger" :icon="Delete" @click="removeHost(row)">删除</el-button>
+            <el-button v-if="auth.hasPermission('hosts.delete')" link type="danger" :icon="Delete" @click="removeHost(row)">删除</el-button>
           </div>
         </div>
         <el-empty v-if="!loading && !hosts.length" description="暂无主机，请先添加主机" :image-size="60" />
@@ -321,7 +320,7 @@ onMounted(loadHosts)
           </div>
           <div class="host-detail-actions">
             <el-tag :type="detailEditing ? detailTestState === 'success' && connectionTestPassed ? 'success' : detailTestState === 'error' ? 'danger' : 'info' : testStatusType(activeHost.id)" effect="light">{{ detailEditing ? detailTestState === 'testing' ? '验证中' : detailTestState === 'success' && connectionTestPassed ? '新配置验证通过' : detailTestState === 'error' ? '验证失败' : '待验证' : testStatusText(activeHost.id) }}</el-tag>
-            <el-button v-if="canManage()" size="small" :type="detailEditing ? 'success' : 'primary'" plain :icon="Connection" :disabled="detailEditing && detailConfigLoading" :loading="detailEditing ? detailTestLoading : testStates[activeHost.id] === 'testing'" @click="detailEditing ? testDraftHostConnection() : testHost(activeHost)">{{ detailEditing ? '测试新配置' : '测试连接' }}</el-button>
+            <el-button v-if="detailEditing ? auth.hasPermission('hosts.edit') : auth.hasPermission('hosts.test')" size="small" :type="detailEditing ? 'success' : 'primary'" plain :icon="Connection" :disabled="detailEditing && detailConfigLoading" :loading="detailEditing ? detailTestLoading : testStates[activeHost.id] === 'testing'" @click="detailEditing ? testDraftHostConnection() : testHost(activeHost)">{{ detailEditing ? '测试新配置' : '测试连接' }}</el-button>
           </div>
         </div>
         <div v-if="!detailEditing" class="host-detail-scroll">
@@ -363,7 +362,7 @@ onMounted(loadHosts)
           <div class="host-detail-section-title host-detail-section-gap">备注</div>
           <el-form-item label="主机备注"><el-input v-model="form.note" type="textarea" :rows="3" /></el-form-item>
         </el-form>
-        <div class="host-detail-footer"><template v-if="detailEditing"><span class="host-test-hint" :class="{ 'is-passed': connectionTestPassed }">{{ connectionTestPassed ? '当前连接和证书验证通过' : '请先测试当前地址及证书' }}</span><el-button @click="cancelHostEdit">取消</el-button><el-button type="primary" :disabled="!connectionTestPassed || detailConfigLoading" :loading="detailSaving" @click="saveHostEdit">保存</el-button></template><el-button v-else-if="canManage()" type="primary" :icon="View" @click="beginHostEdit(activeHost)">编辑主机</el-button></div>
+        <div class="host-detail-footer"><template v-if="detailEditing"><span class="host-test-hint" :class="{ 'is-passed': connectionTestPassed }">{{ connectionTestPassed ? '当前连接和证书验证通过' : '请先测试当前地址及证书' }}</span><el-button @click="cancelHostEdit">取消</el-button><el-button type="primary" :disabled="!connectionTestPassed || detailConfigLoading" :loading="detailSaving" @click="saveHostEdit">保存</el-button></template><el-button v-else-if="auth.hasPermission('hosts.edit')" type="primary" :icon="View" @click="beginHostEdit(activeHost)">编辑主机</el-button></div>
       </div>
     </ResizableDrawer>
   </AppLayout>

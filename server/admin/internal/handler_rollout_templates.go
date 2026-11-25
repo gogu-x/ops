@@ -11,7 +11,7 @@ import (
 
 func (a *AdminService) registerRolloutTemplateRoutes(r *gin.RouterGroup) {
 	r.GET("/rollout-templates", requirePermission(model.PermissionServicesView), a.listRolloutTemplates)
-	r.POST("/rollout-templates", requirePermission(model.PermissionServicesManage), requirePermission(model.PermissionRolloutTemplatesManage), a.createRolloutTemplate)
+	r.POST("/rollout-templates", requirePermission(model.PermissionServicesRolloutCreate), requirePermission(model.PermissionRolloutTemplatesManage), a.createRolloutTemplate)
 }
 
 func (a *AdminService) listRolloutTemplates(c *gin.Context) {

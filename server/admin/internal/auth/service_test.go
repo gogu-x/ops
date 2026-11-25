@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/gogu-x/ops/admin/internal/users"
 	"github.com/gogu-x/ops/conf"
 	"github.com/gogu-x/ops/model"
 	"golang.org/x/crypto/bcrypt"
@@ -86,5 +87,16 @@ func TestManagedUsersRequireScopeAndProtectLastAdmin(t *testing.T) {
 	}
 	if _, err := service.CreateManagedUser(ctx, model.User{Username: "viewer", Role: model.RoleUser, ProjectIDs: []string{"project-a"}, Permissions: []string{model.PermissionProjectsView}}, "viewer-password"); err == nil {
 		t.Fatal("duplicate usernames should be rejected")
+	}
+}
+
+func TestButtonPermissions(t *testing.T) {
+	user := model.User{Role: model.RoleUser, Permissions: []string{model.PermissionServicesRolloutPause, model.PermissionServiceTypesEdit}}
+	if !user.HasPermission(model.PermissionServicesView) || !user.HasPermission(model.PermissionServiceTypesView) || user.HasPermission(model.PermissionServicesRolloutResume) || user.HasPermission(model.PermissionServicesManage) || user.HasPermission(model.PermissionServiceTypesDelete) {
+		t.Fatal("button permissions must grant page access without granting other actions")
+	}
+	user.Permissions = []string{model.PermissionServicesManage}
+	if !user.HasPermission(model.PermissionServicesRolloutPause) || user.HasPermission(model.PermissionHostsEdit) || user.HasPermission(model.PermissionRolloutTemplatesManage) {
+		t.Fatal("legacy service manager permissions must remain scoped to services")
 	}
 }

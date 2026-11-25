@@ -10,12 +10,12 @@ import (
 
 func (a *AdminService) registerHostRoutes(r *gin.RouterGroup) {
 	r.GET("/hosts", requireAnyPermission(model.PermissionHostsView, model.PermissionServicesView, model.PermissionProjectsView), a.listHosts)
-	r.GET("/hosts/:id/config", requirePermission(model.PermissionHostsManage), a.getHostConfiguration)
-	r.POST("/hosts", requirePermission(model.PermissionHostsManage), a.createHost)
-	r.PUT("/hosts/:id", requirePermission(model.PermissionHostsManage), a.updateHost)
-	r.DELETE("/hosts/:id", requirePermission(model.PermissionHostsManage), a.deleteHost)
-	r.POST("/hosts/:id/test", requirePermission(model.PermissionHostsManage), a.testHost)
-	r.POST("/hosts/:id/test-connection", requirePermission(model.PermissionHostsManage), a.testHostConnection)
+	r.GET("/hosts/:id/config", requirePermission(model.PermissionHostsEdit), a.getHostConfiguration)
+	r.POST("/hosts", requirePermission(model.PermissionHostsCreate), a.createHost)
+	r.PUT("/hosts/:id", requirePermission(model.PermissionHostsEdit), a.updateHost)
+	r.DELETE("/hosts/:id", requirePermission(model.PermissionHostsDelete), a.deleteHost)
+	r.POST("/hosts/:id/test", requirePermission(model.PermissionHostsTest), a.testHost)
+	r.POST("/hosts/:id/test-connection", requirePermission(model.PermissionHostsEdit), a.testHostConnection)
 }
 
 func (a *AdminService) getHostConfiguration(c *gin.Context) {

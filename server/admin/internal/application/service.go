@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -457,7 +458,11 @@ func (s *Service) createInstance(ctx context.Context, item model.ServiceInstance
 	if err != nil {
 		return model.ServiceInstance{}, err
 	}
-	if _, err := servicetype.MergeParameterValues(serviceType.ParameterFields, item.Params, nil); err != nil {
+	if err := servicetype.ValidateFixedArgs(serviceType.ParameterFields, item.EnvText); err != nil {
+		return model.ServiceInstance{}, err
+	}
+	item.Params, err = servicetype.MergeParameterValues(serviceType.ParameterFields, item.Params, nil)
+	if err != nil {
 		return model.ServiceInstance{}, err
 	}
 	if err := s.ensureHostInProject(item.HostID, item.ProjectID); err != nil {
@@ -570,17 +575,22 @@ func (s *Service) parameterChanges(ctx context.Context, id string, values map[st
 	if err != nil {
 		return nil, err
 	}
-	params, err := servicetype.MergeParameterValues(serviceType.ParameterFields, stored.Params, values)
-	if err != nil || servicetype.ParameterValuesMatch(stored.Params, values) {
+	if err := servicetype.ValidateFixedArgs(serviceType.ParameterFields, stored.EnvText); err != nil {
+		return nil, err
+	}
+	fields := serviceType.ParameterFields
+	if values == nil {
+		// Operations without form input historically preserve all editable instance parameters.
+		fields = slices.DeleteFunc(slices.Clone(fields), func(field model.ServiceParameterField) bool { return field.Kind != "fixed" })
+	}
+	params, err := servicetype.MergeParameterValues(fields, stored.Params, values)
+	if err != nil || slices.Equal(stored.Params, params) {
 		return nil, err
 	}
 	return &params, nil
 }
 
 func (s *Service) DeployInstanceWithParameters(ctx context.Context, id, operator string, values map[string]string) (model.ServiceInstance, error) {
-	if values == nil {
-		return s.DeployInstance(ctx, id, operator)
-	}
 	params, err := s.parameterChanges(ctx, id, values)
 	if err != nil {
 		return model.ServiceInstance{}, err
@@ -619,9 +629,6 @@ func (s *Service) RestartInstanceWithParameters(ctx context.Context, id, operato
 }
 
 func (s *Service) UpdateInstanceImageWithParameters(ctx context.Context, id, image, operator string, values map[string]string) (model.ServiceInstance, error) {
-	if values == nil {
-		return s.UpdateInstanceImage(ctx, id, image, operator)
-	}
 	params, err := s.parameterChanges(ctx, id, values)
 	if err != nil {
 		return model.ServiceInstance{}, err
@@ -630,17 +637,11 @@ func (s *Service) UpdateInstanceImageWithParameters(ctx context.Context, id, ima
 }
 
 func (s *Service) DeployInstance(ctx context.Context, id string, operator ...string) (model.ServiceInstance, error) {
-	if err := s.ensureStoredInstanceHost(ctx, id); err != nil {
-		return model.ServiceInstance{}, err
-	}
-	return s.instanceResultTimeout(model.DeployRequest{ID: id, Operator: firstOperator(operator)}, 3*time.Minute)
+	return s.DeployInstanceWithParameters(ctx, id, firstOperator(operator), nil)
 }
 
 func (s *Service) UpdateInstanceImage(ctx context.Context, id, image string, operator ...string) (model.ServiceInstance, error) {
-	if err := s.ensureStoredInstanceHost(ctx, id); err != nil {
-		return model.ServiceInstance{}, err
-	}
-	return s.instanceResultTimeout(model.UpdateImageRequest{ID: id, Image: image, Operator: firstOperator(operator)}, 9*time.Minute)
+	return s.UpdateInstanceImageWithParameters(ctx, id, image, firstOperator(operator), nil)
 }
 
 func normalizeReadinessProbe(probe model.ReadinessProbe) model.ReadinessProbe {

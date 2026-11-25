@@ -30,7 +30,6 @@ const latestStartedAt = ref<Record<string, string>>({})
 const loading = ref(true)
 const loadError = ref(false)
 const submitting = ref(false)
-const canManage = computed(() => auth.hasPermission('services.manage'))
 let servicesDisposed = false
 const operationStorageKey = 'ops_service_instance_operation_id'
 
@@ -268,7 +267,7 @@ const instanceDialogVisible = ref(false)
 const editingInstanceId = ref('')
 const instanceForm = reactive<ServiceInstanceForm>({ project_id: '', environment_id: '', service_type_id: '', host_id: '', name: '', rollout_group: '', image: '', params: [], env_text: '', network: '', port_mapping: '', restart_policy: 'unless-stopped', note: '' })
 function parameterFieldsFor(typeID: string): ServiceParameterField[] {
-  return types.value.find(item => item.id === typeID)?.parameter_fields || []
+  return types.value.find(item => item.id === typeID)?.parameter_fields?.filter(field => field.kind !== 'fixed') || []
 }
 
 function initialParameterValues(fields: ServiceParameterField[], params: ServiceParam[] = []) {
@@ -554,6 +553,8 @@ function setBatchOperationInstanceSelected(id: string, checked: boolean) {
 function openBatchOperationDrawer() {
   if (!environmentInstances.value.length) return
   batchParameterValues.value = {}
+  if (!allowedBatchOptions.value.length) return
+  if (!allowedBatchOptions.value.some(option => option.value === batchOperationAction.value)) batchOperationAction.value = allowedBatchOptions.value[0]!.value
   batchOperationDrawerVisible.value = true
 }
 
@@ -571,6 +572,8 @@ const batchOperationOptions: Array<{ value: BatchAction; label: string }> = [
   { value: 'restart', label: '批量重启' },
   { value: 'update_image', label: '批量更新镜像' },
 ]
+
+const allowedBatchOptions = computed(() => batchOperationOptions.filter(option => auth.hasPermission(`services.${option.value}`)))
 
 async function runBatchOperation() {
   if (batchOperationSubmitting.value) return
@@ -1263,14 +1266,14 @@ onUnmounted(() => {
             <button v-for="env in environmentsInProject(activeProjectId)" :key="env.id" :aria-pressed="activeEnvironmentId === env.id" @click="selectEnvironment(activeProjectId, env.id)">{{ env.name }}</button>
           </nav>
           <span class="scope-path">{{ activeProject.name }}<template v-if="activeEnvironment"> / {{ activeEnvironment.name }}</template></span>
-          <div v-if="canManage" class="workspace-actions">
+          <div v-if="auth.hasPermission('services.environment_create') || auth.hasPermission('services.environment_edit') || auth.hasPermission('services.environment_delete') || (auth.hasPermission('service_types.view') || auth.hasPermission('services.view'))" class="workspace-actions">
             <el-dropdown trigger="click">
               <el-button text :icon="MoreFilled" aria-label="项目内资源管理">管理</el-button>
               <template #dropdown><el-dropdown-menu>
-                <el-dropdown-item @click="openCreateEnvironment">新增环境</el-dropdown-item>
-                <el-dropdown-item v-if="activeEnvironment" @click="openEditEnvironment(activeEnvironment)">编辑当前环境</el-dropdown-item>
-                <el-dropdown-item v-if="activeEnvironment" @click="removeEnvironment(activeEnvironment)">删除当前环境</el-dropdown-item>
-                <el-dropdown-item v-if="activeEnvironment" divided @click="openServiceTypes">查看服务类型</el-dropdown-item>
+                <el-dropdown-item v-if="auth.hasPermission('services.environment_create')" @click="openCreateEnvironment">新增环境</el-dropdown-item>
+                <el-dropdown-item v-if="auth.hasPermission('services.environment_edit') && (activeEnvironment)" @click="openEditEnvironment(activeEnvironment)">编辑当前环境</el-dropdown-item>
+                <el-dropdown-item v-if="auth.hasPermission('services.environment_delete') && (activeEnvironment)" @click="removeEnvironment(activeEnvironment)">删除当前环境</el-dropdown-item>
+                <el-dropdown-item v-if="(auth.hasPermission('service_types.view') || auth.hasPermission('services.view')) && (activeEnvironment)" divided @click="openServiceTypes">查看服务类型</el-dropdown-item>
               </el-dropdown-menu></template>
             </el-dropdown>
           </div>
@@ -1278,10 +1281,10 @@ onUnmounted(() => {
         <el-alert v-if="loadError" title="数据加载失败，请重试；已有数据可能不是最新状态。" type="error" show-icon :closable="false" class="load-error" />
         <el-empty v-if="!loading && !projects.length" :description="loadError ? '无法获取项目' : '暂无项目'" :image-size="60">
           <el-button v-if="loadError" @click="loadAll">重试</el-button>
-          <el-button v-else-if="canManage" type="primary" @click="router.push('/projects')">创建项目</el-button>
+          <el-button v-else-if="auth.user?.role === 'admin'" type="primary" @click="router.push('/projects')">创建项目</el-button>
         </el-empty>
         <el-empty v-else-if="!loading && activeProjectId && !environmentsInProject(activeProjectId).length" description="当前项目暂无环境" :image-size="60">
-          <el-button v-if="canManage" type="primary" :icon="Plus" @click="openCreateEnvironment">添加环境</el-button>
+          <el-button v-if="auth.hasPermission('services.environment_create')" type="primary" :icon="Plus" @click="openCreateEnvironment">添加环境</el-button>
         </el-empty>
         <template v-else-if="activeEnvironmentId">
           <div class="service-filter-bar">
@@ -1290,9 +1293,9 @@ onUnmounted(() => {
               <button v-for="type in typesInEnvironment(activeEnvironmentId)" :key="type.id" class="type-tab" :class="{ active: activeTypeId === type.id }" :aria-pressed="activeTypeId === type.id" @click="activeTypeId = type.id; onTypeChange()">{{ type.name }} <em>{{ countInType(type.id) }}</em></button>
             </div>
             <div class="filter-actions">
-              <el-button v-if="canManage" size="small" type="primary" plain :icon="MoreFilled" :disabled="!environmentInstances.length || operationTask?.status === 'running' || batchOperationSubmitting" @click="openBatchOperationDrawer">批量操作</el-button>
+              <el-button v-if="auth.hasPermission('services.batch') && allowedBatchOptions.length" size="small" type="primary" plain :icon="MoreFilled" :disabled="!environmentInstances.length || operationTask?.status === 'running' || batchOperationSubmitting" @click="openBatchOperationDrawer">批量操作</el-button>
               <el-input v-model="keyword" :prefix-icon="Search" clearable placeholder="搜索实例、镜像或备注" aria-label="搜索实例" class="instance-search" />
-              <el-button v-if="canManage" type="primary" :icon="Plus" :disabled="!types.length" @click="openCreateInstance">部署实例</el-button>
+              <el-button v-if="auth.hasPermission('services.create')" type="primary" :icon="Plus" :disabled="!types.length" @click="openCreateInstance">部署实例</el-button>
             </div>
           </div>
           <section v-if="operationTask" class="bulk-task-panel" :class="`task-${operationTask.status}`">
@@ -1315,7 +1318,7 @@ onUnmounted(() => {
             </div>
           </section>
           <el-empty v-if="!types.length" description="暂无全局服务类型" :image-size="60">
-            <el-button v-if="canManage" :icon="Plus" @click="openServiceTypes">查看服务类型</el-button>
+            <el-button v-if="(auth.hasPermission('service_types.view') || auth.hasPermission('services.view'))" :icon="Plus" @click="openServiceTypes">查看服务类型</el-button>
           </el-empty>
           <div v-else class="master-detail">
             <section class="instance-panel">
@@ -1330,8 +1333,8 @@ onUnmounted(() => {
                     <span>{{ hostById.get(row.host_id)?.name || '未知主机' }}</span>
                     <div class="row-actions">
                       <el-button v-if="row.status !== 'not_deployed'" link type="primary" @click="openInstanceLogs(row)">日志</el-button>
-                      <el-button v-if="canManage && row.status === 'stopped'" link type="primary" :loading="actionLoadingId === row.id" @click="startInstance(row)">启动</el-button>
-                      <el-button v-else-if="canManage" link type="primary" @click="openUpdateImage(row)">更新</el-button>
+                      <el-button v-if="auth.hasPermission('services.start') && row.status === 'stopped'" link type="primary" :loading="actionLoadingId === row.id" @click="startInstance(row)">启动</el-button>
+                      <el-button v-else-if="auth.hasPermission('services.update_image')" link type="primary" @click="openUpdateImage(row)">更新</el-button>
                       <el-button link @click="openInstanceDetails(row)">详情</el-button>
                     </div>
                   </div>
@@ -1360,8 +1363,8 @@ onUnmounted(() => {
                 <el-table-column label="操作" width="165" align="right" fixed="right">
                   <template #default="{ row }"><div class="row-actions" @click.stop>
                     <el-button v-if="row.status !== 'not_deployed'" link type="primary" @click="openInstanceLogs(row)">日志</el-button>
-                    <el-button v-if="canManage && row.status === 'stopped'" link type="primary" :loading="actionLoadingId === row.id" @click="startInstance(row)">启动</el-button>
-                    <el-button v-else-if="canManage" link type="primary" @click="openUpdateImage(row)">更新</el-button>
+                    <el-button v-if="auth.hasPermission('services.start') && row.status === 'stopped'" link type="primary" :loading="actionLoadingId === row.id" @click="startInstance(row)">启动</el-button>
+                    <el-button v-else-if="auth.hasPermission('services.update_image')" link type="primary" @click="openUpdateImage(row)">更新</el-button>
                     <el-button link :icon="ArrowRight" :aria-label="`查看 ${row.name} 详情`" @click="openInstanceDetails(row)" />
                   </div></template>
                 </el-table-column>
@@ -1391,20 +1394,20 @@ onUnmounted(() => {
                   <el-button size="small" @click="cancelInstanceEdit">取消</el-button>
                   <el-button size="small" type="primary" :loading="instanceSubmitting" @click="saveInstance(true)">保存</el-button>
                 </div>
-                <div v-else-if="canManage" class="detail-header-actions">
-                  <el-button v-if="activeInstance.status === 'not_deployed' || activeInstance.status === 'error'" size="small" type="primary" :icon="Upload" :loading="actionLoadingId === activeInstance.id" @click="deployInstance(activeInstance)">部署</el-button>
-                  <el-button v-if="activeInstance.status === 'stopped'" size="small" type="success" plain :icon="VideoPlay" :loading="actionLoadingId === activeInstance.id" @click="startInstance(activeInstance)">启动</el-button>
-                  <el-button v-if="activeInstance.status === 'stopped'" size="small" type="primary" :icon="Upload" :loading="actionLoadingId === activeInstance.id" @click="deployInstance(activeInstance)">重新部署</el-button>
-                  <el-button v-if="activeInstance.status === 'running' || activeInstance.status === 'restarting'" size="small" plain :icon="VideoPause" :loading="actionLoadingId === activeInstance.id" @click="stopInstance(activeInstance)">停止</el-button>
-                  <el-button v-if="activeInstance.status === 'running'" size="small" plain :icon="RefreshRight" :loading="actionLoadingId === activeInstance.id" @click="restartInstance(activeInstance)">重启</el-button>
-                  <el-dropdown trigger="click">
+                <div v-else class="detail-header-actions">
+                  <el-button v-if="auth.hasPermission('services.deploy') && (activeInstance.status === 'not_deployed' || activeInstance.status === 'error')" size="small" type="primary" :icon="Upload" :loading="actionLoadingId === activeInstance.id" @click="deployInstance(activeInstance)">部署</el-button>
+                  <el-button v-if="auth.hasPermission('services.start') && (activeInstance.status === 'stopped')" size="small" type="success" plain :icon="VideoPlay" :loading="actionLoadingId === activeInstance.id" @click="startInstance(activeInstance)">启动</el-button>
+                  <el-button v-if="auth.hasPermission('services.deploy') && (activeInstance.status === 'stopped')" size="small" type="primary" :icon="Upload" :loading="actionLoadingId === activeInstance.id" @click="deployInstance(activeInstance)">重新部署</el-button>
+                  <el-button v-if="auth.hasPermission('services.stop') && (activeInstance.status === 'running' || activeInstance.status === 'restarting')" size="small" plain :icon="VideoPause" :loading="actionLoadingId === activeInstance.id" @click="stopInstance(activeInstance)">停止</el-button>
+                  <el-button v-if="auth.hasPermission('services.restart') && (activeInstance.status === 'running')" size="small" plain :icon="RefreshRight" :loading="actionLoadingId === activeInstance.id" @click="restartInstance(activeInstance)">重启</el-button>
+                  <el-dropdown v-if="auth.hasPermission('services.update_image') || auth.hasPermission('services.edit') || auth.hasPermission('services.remove_container') || auth.hasPermission('services.delete')" trigger="click">
                     <el-button size="small" plain :icon="MoreFilled">更多</el-button>
                     <template #dropdown>
                       <el-dropdown-menu>
-                        <el-dropdown-item :icon="Refresh" @click="openUpdateImage(activeInstance)">更新镜像</el-dropdown-item>
-                        <el-dropdown-item :icon="Edit" @click="openEditInstance(activeInstance)">编辑配置</el-dropdown-item>
-                        <el-dropdown-item v-if="activeInstance.status !== 'not_deployed'" :icon="Delete" @click="removeInstanceContainer(activeInstance)">移除容器</el-dropdown-item>
-                        <el-dropdown-item :icon="Delete" divided class="danger-menu-item" @click="removeInstance(activeInstance)">删除实例</el-dropdown-item>
+                        <el-dropdown-item :icon="Refresh" v-if="auth.hasPermission('services.update_image')" @click="openUpdateImage(activeInstance)">更新镜像</el-dropdown-item>
+                        <el-dropdown-item :icon="Edit" v-if="auth.hasPermission('services.edit')" @click="openEditInstance(activeInstance)">编辑配置</el-dropdown-item>
+                        <el-dropdown-item v-if="auth.hasPermission('services.remove_container') && (activeInstance.status !== 'not_deployed')" :icon="Delete" @click="removeInstanceContainer(activeInstance)">移除容器</el-dropdown-item>
+                        <el-dropdown-item :icon="Delete" divided class="danger-menu-item" v-if="auth.hasPermission('services.delete')" @click="removeInstance(activeInstance)">删除实例</el-dropdown-item>
                       </el-dropdown-menu>
                     </template>
                   </el-dropdown>
@@ -1476,7 +1479,7 @@ onUnmounted(() => {
                   <div v-if="activeInstance.note" class="detail-section-title config-title">备注</div>
                   <div v-if="activeInstance.note" class="detail-empty note-text">{{ activeInstance.note }}</div>
 
-                  <el-button class="edit-config-btn" :icon="Edit" @click="openEditInstance(activeInstance)">编辑配置</el-button>
+                  <el-button class="edit-config-btn" :icon="Edit" v-if="auth.hasPermission('services.edit')" @click="openEditInstance(activeInstance)">编辑配置</el-button>
                 </div>
               </el-tab-pane>
 
@@ -1512,7 +1515,7 @@ onUnmounted(() => {
                     </div>
                     <div v-if="deployment.message" class="deployment-history-error">{{ deployment.message }}</div>
                     <el-button
-                      v-if="canManage && deployment.status === 'succeeded' && deployment.image !== activeInstance.image"
+                      v-if="auth.hasPermission('services.rollback') && deployment.status === 'succeeded' && deployment.image !== activeInstance.image"
                       size="small"
                       plain
                       :loading="actionLoadingId === activeInstance.id"
@@ -1615,7 +1618,7 @@ onUnmounted(() => {
               <div class="batch-operation-hint">按服务类型勾选容器；一次最多选择 100 个实例，任务逐项执行。</div>
               <div class="batch-operation-controls">
                 <el-select v-model="batchOperationAction" aria-label="选择批量操作" placeholder="选择操作">
-                  <el-option v-for="option in batchOperationOptions" :key="option.value" :label="option.label" :value="option.value" />
+                  <el-option v-for="option in allowedBatchOptions" :key="option.value" :label="option.label" :value="option.value" />
                 </el-select>
                 <el-input v-if="batchOperationAction === 'update_image'" v-model="batchOperationImage" placeholder="目标镜像，例如 gogs-game:v1004-68d489e4" aria-label="目标镜像" />
               </div>
@@ -1653,14 +1656,14 @@ onUnmounted(() => {
                   </div>
                   <div v-else class="batch-operation-empty-group">该服务类型暂无实例</div>
                   <el-form
-                    v-if="batchOperationAction !== 'stop' && group.selectedCount && group.type.parameter_fields?.length"
+                    v-if="batchOperationAction !== 'stop' && group.selectedCount && parameterFieldsFor(group.type.id).length"
                     class="batch-parameter-form"
                     label-width="90px"
                     :disabled="batchOperationSubmitting"
                   >
                     <p class="form-hint">仅对所选实例生效，留空沿用各实例的值。</p>
                     <ServiceParameterInputs
-                      :fields="group.type.parameter_fields"
+                      :fields="parameterFieldsFor(group.type.id)"
                       :values="batchParameterValues[group.type.id] || {}"
                       optional-overrides
                       @change="(flag, value) => setBatchParameterValue(group.type.id, flag, value)"

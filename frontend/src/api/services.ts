@@ -8,7 +8,7 @@ export interface ServiceParam {
 export interface ServiceParameterField {
   label: string
   flag: string
-  kind: 'text' | 'integer' | 'select'
+  kind: 'text' | 'integer' | 'select' | 'fixed'
   required: boolean
   default_value: string
   options?: string[]

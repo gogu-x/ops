@@ -147,6 +147,13 @@ func (m *Manager) Save(ctx context.Context, user model.User, id string, revision
 }
 
 func (m *Manager) SetEnabled(ctx context.Context, user model.User, id string, revision int64, enabled bool) (model.AutoOpenPolicy, error) {
+	permission := model.PermissionServicesAutoDisable
+	if enabled {
+		permission = model.PermissionServicesAutoEnable
+	}
+	if !user.HasPermission(permission) {
+		return model.AutoOpenPolicy{}, ErrForbidden
+	}
 	item, err := m.authorizedPolicy(ctx, user, id)
 	if err != nil {
 		return item, err
@@ -206,7 +213,7 @@ func (m *Manager) authorizedPolicy(ctx context.Context, user model.User, id stri
 }
 
 func canManage(user model.User, projectID string) bool {
-	return !user.Disabled && user.HasProject(projectID) && user.HasPermission(model.PermissionServicesManage)
+	return !user.Disabled && user.HasProject(projectID) && (user.HasPermission(model.PermissionServicesAutoCreate) || user.HasPermission(model.PermissionServicesAutoEdit) || user.HasPermission(model.PermissionServicesAutoEnable) || user.HasPermission(model.PermissionServicesAutoDisable))
 }
 
 func (m *Manager) template(ctx context.Context, id string, user model.User) (model.ServiceInstance, error) {
@@ -318,7 +325,7 @@ func (m *Manager) openServer(ctx context.Context, policy model.AutoOpenPolicy, r
 	if err != nil {
 		return fmt.Errorf("读取策略启用者失败：%w", err)
 	}
-	if !canManage(operator, policy.ProjectID) {
+	if !canManage(operator, policy.ProjectID) || !operator.HasPermission(model.PermissionServicesAutoEnable) {
 		return ErrForbidden
 	}
 	release, err := m.reserve([]string{run.InstanceID})
